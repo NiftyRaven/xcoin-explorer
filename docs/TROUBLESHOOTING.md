@@ -110,8 +110,8 @@ The live list is nodes that heartbeated an **X Verified** identity in the
 last 180 seconds. Your own wallet only appears there after **Sign in with
 X** in the GUI, with a blue check, while that wallet is running.
 
-Historical winners come from each block’s coinbase (`XHB1`), not from
-gossip.
+Historical winners come from each block’s coinbase `XVA1` (handle + id +
+stamp), not from live `getactivenodes` gossip.
 
 ---
 

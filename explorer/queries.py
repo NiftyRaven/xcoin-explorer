@@ -302,14 +302,14 @@ class Queries:
         rows = self.db.conn.execute(
             """
             SELECT
-                COALESCE(NULLIF(xaccount,''), address, node_id) AS who,
-                xaccount, address, node_id,
+                lower(xaccount) AS who,
+                xaccount,
                 COUNT(*) AS wins,
                 SUM(CASE WHEN is_producer THEN 1 ELSE 0 END) AS produced,
                 SUM(amount) AS earned
             FROM lottery_wins
-            WHERE height>=1
-            GROUP BY COALESCE(NULLIF(xaccount,''), address, node_id)
+            WHERE height>=1 AND xaccount IS NOT NULL AND xaccount != ''
+            GROUP BY lower(xaccount)
             ORDER BY wins DESC, earned DESC
             LIMIT ?
             """,

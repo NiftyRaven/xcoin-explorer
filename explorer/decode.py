@@ -6,7 +6,7 @@ import hashlib
 import struct
 from dataclasses import dataclass, field
 
-from explorer.chain import OP_RVN_ASSET, RVN_PREFIX, XHB1, XID1, classify_asset_name
+from explorer.chain import OP_RVN_ASSET, RVN_PREFIX, XHB1, XID1, XVA1, classify_asset_name
 
 BASE58_ALPHABET = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -220,6 +220,55 @@ def parse_xhb1(script: bytes) -> LotteryCommitment | None:
     return LotteryCommitment(active_ids=ids)
 
 
+@dataclass
+class XvaStamp:
+    handle: str
+    node_id: str  # RPC GetHex of the 20-byte payout id
+    stamp: str  # 65-byte compact sig, hex
+
+
+def parse_xva1(script: bytes) -> list[XvaStamp] | None:
+    """Coinbase OP_RETURN XVA1: count of (handle + id + stamp).
+
+    Wire (see x-coin src/lottery.cpp MakeXvaCommitment):
+      'XVA1' || uint32 LE n ||  n × { u8 hlen || handle || 20-byte id || 65-byte sig }
+    """
+    data = op_return_data(script)
+    if not data or len(data) < 8:
+        return None
+    if data[:4] != XVA1:
+        return None
+    n = int.from_bytes(data[4:8], "little")
+    if n > 1024:
+        return None
+    off = 8
+    out: list[XvaStamp] = []
+    for _ in range(n):
+        if off >= len(data):
+            return None
+        hlen = data[off]
+        off += 1
+        if hlen < 1 or hlen > 32 or off + hlen + 20 + 65 > len(data):
+            return None
+        try:
+            handle = data[off : off + hlen].decode("ascii").lower().lstrip("@")
+        except UnicodeDecodeError:
+            return None
+        off += hlen
+        if not handle or any(
+            c not in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in handle
+        ):
+            return None
+        node_id = rpc_hex(data[off : off + 20])
+        off += 20
+        stamp = data[off : off + 65].hex()
+        off += 65
+        out.append(XvaStamp(handle=handle, node_id=node_id, stamp=stamp))
+    if off != len(data):
+        return None
+    return out
+
+
 def parse_xid1(script: bytes) -> str | None:
     data = op_return_data(script)
     if not data or len(data) < 5:
@@ -344,6 +393,7 @@ def parse_vout_script(script_hex: str, network: str = "main") -> dict:
         "script_type": "nulldata" if is_op_return(script) else "script",
         "op_return": None,
         "xhb1": None,
+        "xva1": None,
         "xid1": None,
         "asset": None,
         "node_id": rpc_hex(hash160(script)) if script else None,
@@ -356,6 +406,11 @@ def parse_vout_script(script_hex: str, network: str = "main") -> dict:
         xhb = parse_xhb1(script)
         if xhb:
             out["xhb1"] = xhb.active_ids
+        xva = parse_xva1(script)
+        if xva:
+            out["xva1"] = [
+                {"handle": s.handle, "node_id": s.node_id, "stamp": s.stamp} for s in xva
+            ]
         xid = parse_xid1(script)
         if xid:
             out["xid1"] = xid

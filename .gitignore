@@ -9,6 +9,7 @@ __pycache__/
 .env
 .env.*
 explorer.toml
+start-wallet-for-explorer.bat
 *.db
 *.db-wal
 *.db-shm

@@ -8,7 +8,7 @@ from explorer.chain import (
     subsidy_at,
     winner_count,
 )
-from explorer.decode import classify_search, parse_xhb1, parse_xid1, select_winners, split_reward
+from explorer.decode import classify_search, parse_xhb1, parse_xid1, parse_xva1, select_winners, split_reward
 
 
 def test_subsidy_schedule():
@@ -63,6 +63,23 @@ def test_xhb1_and_xid1():
     xid_payload = b"XID1" + b"nftrvn"
     xid_script = bytes([0x6A, len(xid_payload)]) + xid_payload
     assert parse_xid1(xid_script) == "nftrvn"
+
+
+def test_xva1_handle_id_stamp():
+    from explorer.decode import rpc_hex
+
+    handle = b"nftrvn"
+    node_id = b"\x02" * 20
+    stamp = b"\x03" * 65
+    body = bytes([len(handle)]) + handle + node_id + stamp
+    payload = b"XVA1" + (1).to_bytes(4, "little") + body
+    script = bytes([0x6A, 0x4C, len(payload)]) + payload
+    rows = parse_xva1(script)
+    assert rows is not None
+    assert len(rows) == 1
+    assert rows[0].handle == "nftrvn"
+    assert rows[0].node_id == rpc_hex(node_id)
+    assert rows[0].stamp == stamp.hex()
 
 
 def test_select_winners_and_split():

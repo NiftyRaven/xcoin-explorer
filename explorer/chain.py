@@ -37,6 +37,8 @@ P2P_PORTS = {
 
 OP_RVN_ASSET = 0xC0
 XHB1 = b"XHB1"
+XVA1 = b"XVA1"
+XSD1 = b"XSD1"
 XID1 = b"XID1"
 RVN_PREFIX = b"rvn"
 

@@ -96,6 +96,7 @@ class Indexer:
         self._repair_genesis()
         self.db.commit()
 
+        self._rebuild_lottery_from_xva()
         self._refresh_lottery_live()
 
         indexed = self.db.indexed_height()
@@ -124,6 +125,83 @@ class Indexer:
         self.status["indexed"] = self.db.indexed_height()
         self.status["error"] = ""
         self.status["indexing"] = self.status["indexed"] < tip
+
+    def _rebuild_lottery_from_xva(self) -> None:
+        """Re-read coinbases so history/leaderboard use XVA1 handles, not live peers."""
+        if self.db.get_meta("lottery_v") == "3":
+            return
+        if not self.rpc.connected:
+            return
+        network = self.status.get("network") or self.db.get_meta("network") or "main"
+        indexed = self.db.indexed_height()
+        self.db.conn.execute("DELETE FROM lottery_wins WHERE height>=1")
+        self.db.conn.execute("DELETE FROM lottery_active WHERE height>=1")
+        for height in range(1, max(indexed, 0) + 1):
+            if self._stop.is_set():
+                return
+            try:
+                block_hash = self.rpc.call("getblockhash", height)
+                block = self.rpc.call("getblock", block_hash, 2)
+            except RpcError:
+                continue
+            txs = block.get("tx") or []
+            if not txs:
+                continue
+            cb = txs[0]
+            if isinstance(cb, str):
+                try:
+                    cb = self.rpc.call("getrawtransaction", cb, True)
+                except RpcError:
+                    continue
+            self._write_lottery_from_coinbase(cb, height, network)
+        self.db.set_meta("lottery_v", "3")
+        self.db.commit()
+
+    def _write_lottery_from_coinbase(self, tx: dict, height: int, network: str) -> None:
+        """Parse XVA1 + payees on an already-indexed coinbase (rebuild path)."""
+        if height < 1:
+            return
+        vouts = tx.get("vout") or []
+        xva: dict[str, str] = {}
+        self.db.conn.execute("DELETE FROM lottery_wins WHERE height=?", (height,))
+        self.db.conn.execute("DELETE FROM lottery_active WHERE height=?", (height,))
+        for vout in vouts:
+            spk = vout.get("scriptPubKey") or {}
+            hexscript = spk.get("hex") or ""
+            parsed = parse_vout_script(hexscript, network) if hexscript else {}
+            if parsed.get("xhb1"):
+                for nid in parsed["xhb1"]:
+                    self.db.conn.execute(
+                        "INSERT OR IGNORE INTO lottery_active(height, node_id) VALUES(?,?)",
+                        (height, nid),
+                    )
+            if parsed.get("xva1"):
+                for row in parsed["xva1"]:
+                    nid = (row.get("node_id") or "").lower()
+                    handle = (row.get("handle") or "").lower().lstrip("@")
+                    if nid and handle:
+                        xva[nid] = handle
+        rank = 0
+        for vout in vouts:
+            spk = vout.get("scriptPubKey") or {}
+            hexscript = spk.get("hex") or ""
+            parsed = parse_vout_script(hexscript, network) if hexscript else {}
+            st = spk.get("type") or parsed.get("script_type")
+            if st in ("nulldata", "nonstandard") or parsed.get("xhb1") or parsed.get("xva1"):
+                continue
+            node_id = lottery_node_id_from_script_hex(hexscript) if hexscript else None
+            handle = xva.get((node_id or "").lower()) if node_id else None
+            addresses = spk.get("addresses") or []
+            address = addresses[0] if addresses else parsed.get("address")
+            value = _atoms(vout.get("value"))
+            self.db.conn.execute(
+                """
+                INSERT OR REPLACE INTO lottery_wins(height, rank, node_id, address, amount, xaccount, is_producer)
+                VALUES(?,?,?,?,?,?,?)
+                """,
+                (height, rank, node_id, address, value, handle, 1 if rank == 0 else 0),
+            )
+            rank += 1
 
     def _repair_genesis(self) -> None:
         """Height 0 is not a payday and its coinbase is not a UTXO."""
@@ -244,6 +322,7 @@ class Indexer:
             "seed": None,
             "winners": [],
             "active": [],
+            "xva": {},  # node_id (rpc hex) -> handle from this block's XVA1
             "subsidy": subsidy_at(height, interval),
             "fees": 0,
         }
@@ -338,6 +417,12 @@ class Indexer:
                         "INSERT OR IGNORE INTO lottery_active(height, node_id) VALUES(?,?)",
                         (height, nid),
                     )
+            if parsed.get("xva1"):
+                for row in parsed["xva1"]:
+                    nid = (row.get("node_id") or "").lower()
+                    handle = (row.get("handle") or "").lower().lstrip("@")
+                    if nid and handle:
+                        lottery.setdefault("xva", {})[nid] = handle
 
         in_rows = []
         for vin in vins:
@@ -459,24 +544,17 @@ class Indexer:
                 and height >= 1
                 and script_type not in ("nulldata",)
                 and not parsed.get("xhb1")
+                and not parsed.get("xva1")
             ):
                 node_id = None
                 if hexscript:
                     node_id = lottery_node_id_from_script_hex(hexscript)
+                # Name this height from THIS coinbase's XVA1 only.
+                # Live getactivenodes / node_seen is this minute and must not
+                # label old blocks (GUI often only sees one peer).
                 handle = None
                 if node_id:
-                    row = self.db.conn.execute(
-                        "SELECT xaccount, address FROM node_seen WHERE node_id=?", (node_id,)
-                    ).fetchone()
-                    if row:
-                        handle = row["xaccount"]
-                        address = address or row["address"]
-                    ident = self.db.conn.execute(
-                        "SELECT handle FROM identities WHERE node_id=? OR address=?",
-                        (node_id, address),
-                    ).fetchone()
-                    if ident:
-                        handle = handle or ident["handle"]
+                    handle = (lottery.get("xva") or {}).get(node_id.lower())
                 lottery["winners"].append(
                     {
                         "rank": winner_rank,
