@@ -126,24 +126,46 @@ function statsRow() {
     </div>`;
 }
 
-function lotteryCard(live, nodes) {
+function winnerWho(w) {
+  if (w && w.xaccount) return handle(w.xaccount);
+  return `<span class="faint">no XVA1</span>`;
+}
+
+function blockWinner(b) {
+  if (b && b.winner_handle) return handle(b.winner_handle);
+  if (b && b.height === 0) return "—";
+  return `<span class="faint">no XVA1</span>`;
+}
+
+function txIdentityHtml(t) {
+  if (t.coinbase) {
+    if (t.winner_handle) return handle(t.winner_handle);
+    if (t.lottery_handles && t.lottery_handles.length) {
+      return t.lottery_handles.map((h) => handle(h)).join(" ");
+    }
+    return `<span class="faint">no XVA1</span>`;
+  }
+  return t.xid_handle ? handle(t.xid_handle) : "—";
+}
+
+function lotteryCard(live, nodes, winnerHandles) {
   const L = live || {};
-  const winners = L.winners || [];
   const rewards = L.rewards || [];
-  const nodeMap = {};
-  (nodes || []).forEach((n) => { nodeMap[(n.id || "").toLowerCase()] = n; });
-  const rows = winners.map((id, i) => {
-    const n = nodeMap[String(id).toLowerCase()] || {};
-    const who = n.xaccount ? handle(n.xaccount) : `<span class="hash">${shortHash(id)}</span>`;
-    const tag = i === 0 ? `<span class="badge lottery">producer</span>` : `<span class="badge">winner</span>`;
-    return `<div class="winner"><div class="who">${tag} ${who}<span class="faint hash">${esc(n.address || id)}</span></div><div class="amt">${atomsToXfer(rewards[i] || 0)}</div></div>`;
-  }).join("") || `<div class="empty">No eligible X Verified nodes in the live draw yet.</div>`;
+  const mapped = winnerHandles || [];
+  const n = Math.max(mapped.length, (L.winners || []).length);
+  const rows = n
+    ? Array.from({ length: n }, (_, i) => {
+        const who = mapped[i] ? handle(mapped[i]) : `<span class="faint">no XVA1</span>`;
+        return `<div class="winner"><div class="who"><span class="badge lottery">winner</span> ${who}</div><div class="amt">${atomsToXfer(rewards[i] || 0)}</div></div>`;
+      }).join("")
+    : `<div class="empty">No eligible X Verified nodes in the live draw yet.</div>`;
+  const activeN = (nodes || []).length || L.active_nodes || 0;
   const slot = L.slot;
   return `
     <div class="card">
       <h2>This minute’s lottery</h2>
       <div class="countdown" id="cd">—:—</div>
-      <p class="muted">Height ${L.height ?? "—"} · slot ${slot ?? "—"} · ${L.active_nodes ?? 0} active · ${L.winner_count ?? 1} winner(s)</p>
+      <p class="muted">Height ${L.height ?? "—"} · slot ${slot ?? "—"} · ${activeN} active · ${L.winner_count ?? 1} winner(s)</p>
       ${rows}
       <div class="row-actions"><a href="#/lottery">Full lottery →</a></div>
     </div>`;
@@ -163,7 +185,7 @@ async function pageHome() {
   ]);
   const recentWins = (lottery.history || []).slice(0, 6).map((h) => {
     const w = (h.winners || [])[0] || {};
-    const who = w.xaccount ? handle(w.xaccount) : `<span class="faint">no XVA1</span>`;
+    const who = winnerWho(w);
     return `<tr><td>${linkBlock(h.height)}</td><td>${who}</td><td>${atomsToXfer(w.amount)}</td><td class="muted">${timeAgo(h.time)}</td></tr>`;
   }).join("");
   app.innerHTML = `
@@ -173,22 +195,22 @@ async function pageHome() {
       <div class="card">
         <h2>Latest blocks</h2>
         <table>
-          <thead><tr><th>Height</th><th>Time</th><th>Tx</th><th>Producer</th></tr></thead>
+          <thead><tr><th>Height</th><th>Time</th><th>Tx</th><th>Winner</th></tr></thead>
           <tbody>
             ${(blocks.items || []).map((b) => `<tr>
               <td>${linkBlock(b.height)}</td>
               <td class="muted">${timeAgo(b.time)}</td>
               <td>${b.tx_count}</td>
-              <td>${linkAddr(b.producer)}</td>
+              <td>${blockWinner(b)}</td>
             </tr>`).join("") || `<tr><td colspan="4" class="empty">No blocks indexed yet. Genesis appears once the node is up.</td></tr>`}
           </tbody>
         </table>
         <div class="row-actions"><a href="#/blocks">All blocks →</a></div>
       </div>
-      ${lotteryCard(lottery.live, lottery.nodes)}
+      ${lotteryCard(lottery.live, lottery.nodes, lottery.winner_handles)}
     </div>
     <div class="card" style="margin-top:16px">
-      <h2>Recent lottery producers</h2>
+      <h2>Recent lottery winners</h2>
       <table>
         <thead><tr><th>Block</th><th>Winner</th><th>Reward</th><th>When</th></tr></thead>
         <tbody>${recentWins || `<tr><td colspan="4" class="empty">Winners show up from height 1 coinbases (XHB1).</td></tr>`}</tbody>
@@ -204,7 +226,7 @@ async function pageBlocks() {
     <p class="sub">One height per minute. Height 0 is genesis (no payday). Height 1+ is the lottery coinbase.</p>
     <div class="card">
       <table>
-        <thead><tr><th>Height</th><th>Hash</th><th>Time</th><th>Tx</th><th>Winners</th><th>Producer</th></tr></thead>
+        <thead><tr><th>Height</th><th>Hash</th><th>Time</th><th>Tx</th><th>Winners</th><th>Winner</th></tr></thead>
         <tbody>
           ${(data.items || []).map((b) => `<tr>
             <td>${linkBlock(b.height)}</td>
@@ -212,7 +234,7 @@ async function pageBlocks() {
             <td class="muted">${fmtTime(b.time)}</td>
             <td>${b.tx_count}</td>
             <td>${b.winner_count || (b.height === 0 ? "—" : "0")}</td>
-            <td>${linkAddr(b.producer)}</td>
+            <td>${blockWinner(b)}</td>
           </tr>`).join("")}
         </tbody>
       </table>
@@ -239,9 +261,8 @@ async function pageBlock(key) {
     <div class="card" style="margin-bottom:16px">
       <h2>Lottery winners</h2>
       ${wins.length ? wins.map((w) => `<div class="winner">
-        <div class="who">${w.is_producer ? `<span class="badge lottery">winner</span>` : `<span class="badge">#${(w.rank || 0) + 1}</span>`}
-          ${w.xaccount ? handle(w.xaccount) : `<span class="faint">no XVA1 handle</span>`}
-          <span class="faint">${w.address ? linkAddr(w.address) : ""}</span>
+        <div class="who">${w.rank === 0 ? `<span class="badge lottery">winner</span>` : `<span class="badge">#${(w.rank || 0) + 1}</span>`}
+          ${winnerWho(w)}
         </div>
         <div class="amt">${atomsToXfer(w.amount)}</div>
       </div>`).join("") : `<div class="empty">${b.height === 0 ? "Genesis has no lottery." : "No XHB1 winners decoded for this block."}</div>`}
@@ -281,7 +302,7 @@ async function pageTx(id) {
         <b>Block</b><div>${t.height != null ? linkBlock(t.height) : "mempool"} ${t.block_hash ? `<span class="hash">${shortHash(t.block_hash)}</span>` : ""}</div>
         <b>Time</b><div>${fmtTime(t.time)}</div>
         <b>Fee</b><div>${t.coinbase ? "—" : atomsToXfer(t.fee)}</div>
-        <b>Identity</b><div>${t.xid_handle ? handle(t.xid_handle) : "—"}</div>
+        <b>Identity</b><div>${txIdentityHtml(t)}</div>
       </div>
     </div>
     <div class="io">
@@ -316,7 +337,7 @@ async function pageAddress(addr) {
         </div>
         <div class="card">
           <h2>Lottery</h2>
-          ${(a.lottery_wins || []).map((w) => `<div class="winner"><div>${linkBlock(w.height)} ${w.is_producer ? `<span class="badge lottery">producer</span>` : ""}</div><div class="amt">${atomsToXfer(w.amount)}</div></div>`).join("") || `<div class="empty">No wins.</div>`}
+          ${(a.lottery_wins || []).map((w) => `<div class="winner"><div>${linkBlock(w.height)} ${w.xaccount ? handle(w.xaccount) : `<span class="faint">no XVA1</span>`}</div><div class="amt">${atomsToXfer(w.amount)}</div></div>`).join("") || `<div class="empty">No wins.</div>`}
         </div>
       </div>
     </div>`;
@@ -389,25 +410,22 @@ async function pageLottery() {
   const L = await api("/lottery");
   const live = L.live || {};
   const nodes = L.nodes || [];
-  const liveHint = L.rpc_connected
-    ? (nodes.length
-        ? nodes.map((n) => `<div class="winner">
-          <div class="who">${n.local ? `<span class="badge ok">local</span>` : `<span class="badge">node</span>`}
-            ${n.xaccount ? handle(n.xaccount) : `<span class="hash">${shortHash(n.id)}</span>`}
-            <span class="faint">${linkAddr(n.address)}</span>
-          </div>
-          <div class="muted">${n.lastseen ? timeAgo(n.lastseen) : ""}</div>
+  const active = L.active_handles || nodes.map((n) => n.xaccount).filter(Boolean);
+  const liveHint = active.length
+    ? active.map((h) => `<div class="winner">
+          <div class="who"><span class="badge">hat</span> ${handle(h)}</div>
         </div>`).join("")
-        : `<div class="empty">No heartbeats in the last 180s. Lottery needs a signed-in X Verified wallet on a connected peer.</div>`)
-    : `<div class="empty">Live heartbeats need a connected wallet (see docs/SETUP.md). History below is from blocks already indexed.</div>`;
+    : (L.rpc_connected
+        ? `<div class="empty">No XVA1 handles this minute. The baked seed prints every main block; wait for the next coinbase.</div>`
+        : `<div class="empty">Connect a local wallet (see docs/SETUP.md). History below is from blocks already indexed.</div>`);
   app.innerHTML = `
     ${nodeBanner()}
     <h1 class="page-title">Lottery</h1>
-    <p class="sub">Every minute, X Verified running nodes are drawn. Height ≥ 1 coinbase carries <code>XVA1</code> (handle + id + stamp) — history and the leaderboard use that handle, not the payout address (addresses change; @handle does not). Live “active now” is this minute only. Height 0 is not a payday.</p>
+    <p class="sub">The baked seed prints every main block. Coinbase <code>XVA1</code> is the public roll (handle + id + stamp). The winner is who got paid — history and the leaderboard key on that <code>@handle</code>, not the payout address (addresses change; the handle does not). Live “active now” is <code>stamped_handles</code> when the node has it, otherwise the last indexed block’s XVA1 hat. Height 0 is not a payday.</p>
     <div class="grid two">
-      ${lotteryCard(live, nodes)}
+      ${lotteryCard(live, nodes, L.winner_handles)}
       <div class="card">
-        <h2>Active nodes now</h2>
+        <h2>Active now</h2>
         ${liveHint}
         <p class="muted" style="margin-top:12px">Eligible locally: ${live.local_eligible ? "yes" : "no"} · verified: ${live.local_x_verified ? "yes" : "no"} · @${esc(live.local_xaccount || "—")}</p>
       </div>
@@ -420,7 +438,7 @@ async function pageLottery() {
           <tbody>
             ${(L.history || []).map((h) => {
               const w = (h.winners || [])[0] || {};
-              return `<tr><td>${linkBlock(h.height)}</td><td>${w.xaccount ? handle(w.xaccount) : `<span class="faint">no XVA1</span>`}</td><td>${atomsToXfer(w.amount)}</td></tr>`;
+              return `<tr><td>${linkBlock(h.height)}</td><td>${winnerWho(w)}</td><td>${atomsToXfer(w.amount)}</td></tr>`;
             }).join("") || `<tr><td colspan="3" class="empty">No lottery blocks yet. Height 0 is genesis (unspendable, not a win). Height 1 is the first draw.</td></tr>`}
           </tbody>
         </table>
@@ -428,12 +446,12 @@ async function pageLottery() {
       <div class="card">
         <h2>Leaderboard</h2>
         <table>
-          <thead><tr><th>Who</th><th>Wins</th><th>Produced</th><th>Earned</th></tr></thead>
+          <thead><tr><th>Who</th><th>Wins</th><th>Earned</th></tr></thead>
           <tbody>
             ${(L.leaders || []).map((x) => `<tr>
-              <td>${x.xaccount ? handle(x.xaccount) : esc(x.who || "")}</td>
-              <td>${x.wins}</td><td>${x.produced}</td><td>${atomsToXfer(x.earned)}</td>
-            </tr>`).join("") || `<tr><td colspan="4" class="empty">No XVA1 winners indexed.</td></tr>`}
+              <td>${x.xaccount ? handle(x.xaccount) : `<span class="faint">no XVA1</span>`}</td>
+              <td>${x.wins}</td><td>${atomsToXfer(x.earned)}</td>
+            </tr>`).join("") || `<tr><td colspan="3" class="empty">No XVA1 winners indexed.</td></tr>`}
           </tbody>
         </table>
       </div>

@@ -102,13 +102,49 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
     @app.get("/api/lottery")
     def lottery():
         live = None
-        nodes: list = []
+        last_xva = queries.last_xva()
+        id_map: dict[str, str] = {}
+        for row in last_xva:
+            nid = (row.get("node_id") or "").lower()
+            handle = (row.get("xaccount") or "").lower().lstrip("@")
+            if nid and handle:
+                id_map[nid] = handle
+        # getactivenodes is not the seed hat (player nodes often omit themselves).
+        # Use it only as a supplemental id → handle map.
+        extra = []
         if rpc.connected:
             live = rpc.try_call("getlotteryinfo", default=None)
-            nodes = rpc.try_call("getactivenodes", default=None) or indexer.live_nodes()
+            extra = rpc.try_call("getactivenodes", default=None) or indexer.live_nodes() or []
+        for n in extra:
+            nid = (n.get("id") or "").lower()
+            handle = (n.get("xaccount") or "").lower().lstrip("@")
+            if nid and handle:
+                id_map[nid] = handle
+        stamped = None
+        if isinstance(live, dict):
+            stamped = live.get("stamped_handles")
+        if stamped:
+            active_handles = [str(h).lower().lstrip("@") for h in stamped if h]
+        else:
+            active_handles = []
+            seen: set[str] = set()
+            for row in last_xva:
+                h = (row.get("xaccount") or "").lower().lstrip("@")
+                if h and h not in seen:
+                    seen.add(h)
+                    active_handles.append(h)
+        winner_handles: list[str] = []
+        if isinstance(live, dict):
+            for wid in live.get("winners") or []:
+                h = id_map.get(str(wid).lower())
+                if h:
+                    winner_handles.append(h)
+        nodes = [{"xaccount": h} for h in active_handles]
         return {
             "live": live,
             "nodes": nodes,
+            "active_handles": active_handles,
+            "winner_handles": winner_handles,
             "rpc_connected": bool(rpc.connected),
             "history": queries.lottery_history(30),
             "leaders": queries.lottery_leaders(40),
