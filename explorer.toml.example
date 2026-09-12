@@ -1,0 +1,29 @@
+# XFER Explorer — local settings
+#
+# 1. Copy this file and name the copy:  explorer.toml
+# 2. Leave user/password empty if your wallet writes a .cookie (usual case).
+# 3. Only fill user/password if you also set the SAME values in xcoin.conf.
+#
+# Never commit explorer.toml. It can hold a password.
+
+[rpc]
+host = "127.0.0.1"
+
+# 0 = try 38442 (main), then 28442 (practice), then 48442 (testnet)
+port = 0
+
+# Leave these two empty to use the wallet cookie file instead.
+user = ""
+password = ""
+
+# Optional. Empty = auto-detect:
+#   Windows:  %APPDATA%\XCoin\.cookie
+#   Linux:    ~/.xcoin/.cookie
+cookie_file = ""
+
+[explorer]
+host = "127.0.0.1"
+port = 8080
+database = "data/xcoin-explorer.db"
+batch_size = 40
+poll_seconds = 4

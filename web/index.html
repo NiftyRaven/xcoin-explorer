@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XFER Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%07080d' width='32' height='32' rx='6'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='16' font-family='Sora' fill='%3d8bff'%3EX%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <a class="brand" href="#/">
+        <span class="mark">X</span>
+        <span class="brand-text">
+          <strong>XFER Explorer</strong>
+          <em>blocks · assets · lottery</em>
+        </span>
+      </a>
+      <form class="search" id="search-form">
+        <input id="q" type="search" placeholder="Search height, hash, address, asset, @handle" autocomplete="off" />
+        <button type="submit">Search</button>
+      </form>
+      <div class="status-pills">
+        <span class="pill" id="pill-rpc">node…</span>
+        <span class="pill gold" id="pill-height">height —</span>
+      </div>
+    </header>
+    <nav class="nav">
+      <a href="#/">Home</a>
+      <a href="#/blocks">Blocks</a>
+      <a href="#/lottery">Lottery</a>
+      <a href="#/assets">Assets</a>
+      <a href="#/rich">Holders</a>
+      <a href="#/mempool">Mempool</a>
+      <a href="#/network">Network</a>
+    </nav>
+    <main id="app"><div class="loading">Loading explorer…</div></main>
+    <footer class="foot">
+      Local explorer for <a href="https://github.com/NiftyRaven/x-coin" target="_blank" rel="noreferrer">X Coin (XFER)</a>
+      · one minute lottery among X Verified nodes · native assets
+      · <span id="foot-net"></span>
+    </footer>
+  </div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

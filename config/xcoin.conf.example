@@ -1,0 +1,26 @@
+# =============================================================================
+# Add these lines to the X Coin *wallet* config — not this explorer folder.
+#
+# Windows (main):     %APPDATA%\XCoin\xcoin.conf
+#   How to open that folder:  Win+R  →  type  %APPDATA%\XCoin  →  Enter
+# Linux (main):       ~/.xcoin/xcoin.conf
+# Practice / regtest: the same path plus  \regtest\  or  /regtest/
+#
+# Then fully quit the wallet and open it once.
+# =============================================================================
+
+# Lets this explorer read blocks (required)
+server=1
+
+# Optional but useful. If the wallet already ran without these, leave them
+# off until you know you can reindex. The explorer can still index confirmed
+# blocks from getblock without them.
+#txindex=1
+#assetindex=1
+
+# --- Only if cookie login fails ---
+# Pick your own username and a long password. Copy the SAME two values into
+# explorer.toml  (rpc.user / rpc.password). Never share them.
+#rpcuser=YOUR_RPC_USERNAME
+#rpcpassword=YOUR_LONG_RANDOM_PASSWORD
+#rpcallowip=127.0.0.1
