@@ -68,13 +68,18 @@ class Queries:
 
     def recent_blocks(self, limit: int = 20, before: int | None = None) -> list[dict]:
         limit = paginate(limit)
+        sql = """
+            SELECT b.*, w.xaccount AS winner_handle
+            FROM blocks b
+            LEFT JOIN lottery_wins w ON w.height = b.height AND w.rank = 0
+        """
         if before is None:
             rows = self.db.conn.execute(
-                "SELECT * FROM blocks ORDER BY height DESC LIMIT ?", (limit,)
+                sql + " ORDER BY b.height DESC LIMIT ?", (limit,)
             ).fetchall()
         else:
             rows = self.db.conn.execute(
-                "SELECT * FROM blocks WHERE height < ? ORDER BY height DESC LIMIT ?",
+                sql + " WHERE b.height < ? ORDER BY b.height DESC LIMIT ?",
                 (before, limit),
             ).fetchall()
         return [row_to_dict(r) for r in rows]
@@ -108,7 +113,20 @@ class Queries:
             ).fetchall()
         ]
         block["txs"] = txs
-        block["lottery"] = {"winners": wins, "active_ids": active}
+        block["lottery"] = {
+            "winners": wins,
+            "active_ids": active,
+            "handles": [
+                r["xaccount"]
+                for r in (
+                    self.db.conn.execute(
+                        "SELECT xaccount FROM lottery_active WHERE height=? AND xaccount IS NOT NULL AND TRIM(xaccount)!='' ORDER BY n ASC, node_id",
+                        (block["height"],),
+                    ).fetchall()
+                )
+            ],
+        }
+        block["winner_handle"] = (wins[0].get("xaccount") if wins else None)
         return block
 
     def tx(self, txid: str) -> dict | None:
@@ -132,6 +150,8 @@ class Queries:
         ]
         tx["vin"] = ins
         tx["vout"] = outs
+        tx["lottery_handles"] = []
+        tx["winner_handle"] = None
         if tx.get("height") is not None:
             b = self.db.conn.execute(
                 "SELECT hash, time FROM blocks WHERE height=?", (tx["height"],)
@@ -139,6 +159,39 @@ class Queries:
             if b:
                 tx["block_hash"] = b["hash"]
                 tx["block_time"] = b["time"]
+            if tx.get("coinbase"):
+                wins = [
+                    row_to_dict(r)
+                    for r in self.db.conn.execute(
+                        "SELECT * FROM lottery_wins WHERE height=? ORDER BY rank ASC",
+                        (tx["height"],),
+                    ).fetchall()
+                ]
+                active = [
+                    row_to_dict(r)
+                    for r in self.db.conn.execute(
+                        "SELECT node_id, xaccount FROM lottery_active WHERE height=? ORDER BY n ASC, node_id",
+                        (tx["height"],),
+                    ).fetchall()
+                ]
+                handles: list[str] = []
+                seen: set[str] = set()
+                for row in active:
+                    h = (row.get("xaccount") or "").lower().lstrip("@")
+                    if h and h not in seen:
+                        seen.add(h)
+                        handles.append(h)
+                if not handles:
+                    for row in wins:
+                        h = (row.get("xaccount") or "").lower().lstrip("@")
+                        if h and h not in seen:
+                            seen.add(h)
+                            handles.append(h)
+                tx["lottery_handles"] = handles
+                if wins:
+                    tx["winner_handle"] = (wins[0].get("xaccount") or None)
+                    if tx["winner_handle"]:
+                        tx["winner_handle"] = str(tx["winner_handle"]).lower().lstrip("@")
         return tx
 
     def address(self, addr: str, limit: int = 50) -> dict:
@@ -303,12 +356,11 @@ class Queries:
             """
             SELECT
                 lower(xaccount) AS who,
-                xaccount,
+                lower(xaccount) AS xaccount,
                 COUNT(*) AS wins,
-                SUM(CASE WHEN is_producer THEN 1 ELSE 0 END) AS produced,
                 SUM(amount) AS earned
             FROM lottery_wins
-            WHERE height>=1 AND xaccount IS NOT NULL AND xaccount != ''
+            WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount) != ''
             GROUP BY lower(xaccount)
             ORDER BY wins DESC, earned DESC
             LIMIT ?
@@ -316,6 +368,42 @@ class Queries:
             (limit,),
         ).fetchall()
         return [row_to_dict(r) for r in rows]
+
+    def last_xva(self) -> list[dict]:
+        """Handles (+ ids) from the last indexed block that carried XVA1."""
+        row = self.db.conn.execute(
+            """
+            SELECT MAX(height) AS h FROM lottery_active
+            WHERE xaccount IS NOT NULL AND TRIM(xaccount) != ''
+            """
+        ).fetchone()
+        height = row["h"] if row else None
+        if height is None:
+            row = self.db.conn.execute(
+                """
+                SELECT MAX(height) AS h FROM lottery_wins
+                WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount) != ''
+                """
+            ).fetchone()
+            height = row["h"] if row else None
+        if height is None:
+            return []
+        active = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                "SELECT node_id, xaccount FROM lottery_active WHERE height=? ORDER BY n ASC, node_id",
+                (height,),
+            ).fetchall()
+        ]
+        if any((r.get("xaccount") or "").strip() for r in active):
+            return active
+        return [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                "SELECT node_id, xaccount FROM lottery_wins WHERE height=? ORDER BY rank",
+                (height,),
+            ).fetchall()
+        ]
 
     def rich_list(self, limit: int = 50) -> list[dict]:
         limit = paginate(limit, 50)

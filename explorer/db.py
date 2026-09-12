@@ -101,6 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_wins_node ON lottery_wins(node_id);
 CREATE TABLE IF NOT EXISTS lottery_active (
     height INTEGER NOT NULL,
     node_id TEXT NOT NULL,
+    xaccount TEXT,
+    n INTEGER DEFAULT 0,
     PRIMARY KEY (height, node_id)
 );
 
@@ -161,6 +163,15 @@ class Database:
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(lottery_active)")}
+        if "xaccount" not in cols:
+            self.conn.execute("ALTER TABLE lottery_active ADD COLUMN xaccount TEXT")
+        if "n" not in cols:
+            self.conn.execute("ALTER TABLE lottery_active ADD COLUMN n INTEGER DEFAULT 0")
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()

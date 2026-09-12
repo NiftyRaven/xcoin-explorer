@@ -15,12 +15,15 @@ from explorer.chain import (
 )
 from explorer.db import Database
 from explorer.decode import (
-    lottery_node_id_from_script_hex,
+    coinbase_lottery,
     parse_vout_script,
     seed_for_draw,
     select_winners,
 )
 from explorer.rpc import RpcError, XCoinRPC
+
+# Bump to force a full XVA1 rebuild of lottery_wins / lottery_active.
+LOTTERY_INDEX_V = "4"
 
 
 def _atoms(value: Any) -> int:
@@ -128,7 +131,7 @@ class Indexer:
 
     def _rebuild_lottery_from_xva(self) -> None:
         """Re-read coinbases so history/leaderboard use XVA1 handles, not live peers."""
-        if self.db.get_meta("lottery_v") == "3":
+        if self.db.get_meta("lottery_v") == LOTTERY_INDEX_V:
             return
         if not self.rpc.connected:
             return
@@ -154,54 +157,54 @@ class Indexer:
                 except RpcError:
                     continue
             self._write_lottery_from_coinbase(cb, height, network)
-        self.db.set_meta("lottery_v", "3")
+        self.db.set_meta("lottery_v", LOTTERY_INDEX_V)
         self.db.commit()
 
+    def _upsert_lottery_active(
+        self, height: int, node_id: str | None, handle: str | None, n: int = 0
+    ) -> None:
+        nid = (node_id or "").lower()
+        if not nid:
+            return
+        xaccount = (handle or "").lower().lstrip("@") or None
+        self.db.conn.execute(
+            """
+            INSERT INTO lottery_active(height, node_id, xaccount, n) VALUES(?,?,?,?)
+            ON CONFLICT(height, node_id) DO UPDATE SET
+                xaccount=COALESCE(excluded.xaccount, lottery_active.xaccount),
+                n=excluded.n
+            """,
+            (height, nid, xaccount, n),
+        )
+
     def _write_lottery_from_coinbase(self, tx: dict, height: int, network: str) -> None:
-        """Parse XVA1 + payees on an already-indexed coinbase (rebuild path)."""
+        """Parse XVA1 + value>0 payees on an already-indexed coinbase (rebuild path)."""
         if height < 1:
             return
-        vouts = tx.get("vout") or []
-        xva: dict[str, str] = {}
+        lot = coinbase_lottery(tx.get("vout") or [], network)
         self.db.conn.execute("DELETE FROM lottery_wins WHERE height=?", (height,))
         self.db.conn.execute("DELETE FROM lottery_active WHERE height=?", (height,))
-        for vout in vouts:
-            spk = vout.get("scriptPubKey") or {}
-            hexscript = spk.get("hex") or ""
-            parsed = parse_vout_script(hexscript, network) if hexscript else {}
-            if parsed.get("xhb1"):
-                for nid in parsed["xhb1"]:
-                    self.db.conn.execute(
-                        "INSERT OR IGNORE INTO lottery_active(height, node_id) VALUES(?,?)",
-                        (height, nid),
-                    )
-            if parsed.get("xva1"):
-                for row in parsed["xva1"]:
-                    nid = (row.get("node_id") or "").lower()
-                    handle = (row.get("handle") or "").lower().lstrip("@")
-                    if nid and handle:
-                        xva[nid] = handle
-        rank = 0
-        for vout in vouts:
-            spk = vout.get("scriptPubKey") or {}
-            hexscript = spk.get("hex") or ""
-            parsed = parse_vout_script(hexscript, network) if hexscript else {}
-            st = spk.get("type") or parsed.get("script_type")
-            if st in ("nulldata", "nonstandard") or parsed.get("xhb1") or parsed.get("xva1"):
-                continue
-            node_id = lottery_node_id_from_script_hex(hexscript) if hexscript else None
-            handle = xva.get((node_id or "").lower()) if node_id else None
-            addresses = spk.get("addresses") or []
-            address = addresses[0] if addresses else parsed.get("address")
-            value = _atoms(vout.get("value"))
+        active_ids = [r["node_id"] for r in lot["xva"]] or lot["xhb1"]
+        for i, nid in enumerate(active_ids):
+            self._upsert_lottery_active(
+                height, nid, lot["id_to_handle"].get((nid or "").lower()), i
+            )
+        for w in lot["winners"]:
             self.db.conn.execute(
                 """
                 INSERT OR REPLACE INTO lottery_wins(height, rank, node_id, address, amount, xaccount, is_producer)
                 VALUES(?,?,?,?,?,?,?)
                 """,
-                (height, rank, node_id, address, value, handle, 1 if rank == 0 else 0),
+                (
+                    height,
+                    w["rank"],
+                    w.get("node_id"),
+                    w.get("address"),
+                    w.get("amount") or 0,
+                    w.get("xaccount"),
+                    w.get("is_producer") or 0,
+                ),
             )
-            rank += 1
 
     def _repair_genesis(self) -> None:
         """Height 0 is not a payday and its coinbase is not a UTXO."""
@@ -403,26 +406,40 @@ class Indexer:
         xid_handle = None
         identity = 0
 
+        if coinbase and height >= 1:
+            lot = coinbase_lottery(vouts, network)
+            lottery["xva"] = lot["id_to_handle"]
+            lottery["active"] = [r["node_id"] for r in lot["xva"]] or lot["xhb1"]
+            for i, nid in enumerate(lottery["active"]):
+                self._upsert_lottery_active(
+                    height, nid, lot["id_to_handle"].get((nid or "").lower()), i
+                )
+            lottery["winners"] = lot["winners"]
+            for w in lot["winners"]:
+                self.db.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO lottery_wins(height, rank, node_id, address, amount, xaccount, is_producer)
+                    VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        height,
+                        w["rank"],
+                        w.get("node_id"),
+                        w.get("address"),
+                        w.get("amount") or 0,
+                        w.get("xaccount"),
+                        w.get("is_producer") or 0,
+                    ),
+                )
+
         for vout in vouts:
             spk = vout.get("scriptPubKey") or {}
             hexscript = spk.get("hex") or ""
             parsed = parse_vout_script(hexscript, network) if hexscript else {}
-            if parsed.get("xid1"):
+            # XID1 is the asset-root claim (e.g. NFTRVN). Never lottery identity.
+            if parsed.get("xid1") and not coinbase:
                 xid_handle = parsed["xid1"]
                 identity = 1
-            if parsed.get("xhb1") is not None:
-                lottery["active"] = parsed["xhb1"]
-                for nid in parsed["xhb1"]:
-                    self.db.conn.execute(
-                        "INSERT OR IGNORE INTO lottery_active(height, node_id) VALUES(?,?)",
-                        (height, nid),
-                    )
-            if parsed.get("xva1"):
-                for row in parsed["xva1"]:
-                    nid = (row.get("node_id") or "").lower()
-                    handle = (row.get("handle") or "").lower().lstrip("@")
-                    if nid and handle:
-                        lottery.setdefault("xva", {})[nid] = handle
 
         in_rows = []
         for vin in vins:
@@ -461,7 +478,6 @@ class Indexer:
                 }
             )
 
-        winner_rank = 0
         for vout in vouts:
             nout = int(vout.get("n") or 0)
             value = _atoms(vout.get("value"))
@@ -538,49 +554,6 @@ class Indexer:
 
             if asset_info:
                 self._note_asset(asset_info, height, txid, address, xid_handle)
-
-            if (
-                coinbase
-                and height >= 1
-                and script_type not in ("nulldata",)
-                and not parsed.get("xhb1")
-                and not parsed.get("xva1")
-            ):
-                node_id = None
-                if hexscript:
-                    node_id = lottery_node_id_from_script_hex(hexscript)
-                # Name this height from THIS coinbase's XVA1 only.
-                # Live getactivenodes / node_seen is this minute and must not
-                # label old blocks (GUI often only sees one peer).
-                handle = None
-                if node_id:
-                    handle = (lottery.get("xva") or {}).get(node_id.lower())
-                lottery["winners"].append(
-                    {
-                        "rank": winner_rank,
-                        "node_id": node_id,
-                        "address": address,
-                        "amount": value,
-                        "xaccount": handle,
-                        "is_producer": 1 if winner_rank == 0 else 0,
-                    }
-                )
-                self.db.conn.execute(
-                    """
-                    INSERT OR REPLACE INTO lottery_wins(height, rank, node_id, address, amount, xaccount, is_producer)
-                    VALUES(?,?,?,?,?,?,?)
-                    """,
-                    (
-                        height,
-                        winner_rank,
-                        node_id,
-                        address,
-                        value,
-                        handle,
-                        1 if winner_rank == 0 else 0,
-                    ),
-                )
-                winner_rank += 1
 
         for i, row in enumerate(in_rows):
             self.db.conn.execute(

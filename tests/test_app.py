@@ -28,4 +28,10 @@ def test_health_and_home(tmp_path: Path):
     assert css.status_code == 200
     js = client.get("/static/js/app.js")
     assert js.status_code == 200
+    text = js.text
+    assert "producer" not in text
+    assert "txIdentityHtml" in text
+    assert "winner_handle" in text
+    assert "no XVA1" in text
+    assert "linkAddr(w." not in text
     db.close()

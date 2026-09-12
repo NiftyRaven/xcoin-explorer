@@ -106,12 +106,15 @@ wallet packages ship `addnode` / `seednode`. Do not invent a host.
 
 ## Lottery “0 active”
 
-The live list is nodes that heartbeated an **X Verified** identity in the
-last 180 seconds. Your own wallet only appears there after **Sign in with
-X** in the GUI, with a blue check, while that wallet is running.
+Live “active now” is `getlotteryinfo.stamped_handles` when the connected
+node has it (the baked seed prints every main block). Otherwise the
+explorer shows the last indexed block’s coinbase `XVA1` handles. It does
+**not** treat `getactivenodes` as the hat — a player wallet often omits
+itself.
 
 Historical winners come from each block’s coinbase `XVA1` (handle + id +
-stamp), not from live `getactivenodes` gossip.
+stamp). The winner is who got paid. Payout addresses change; `@handle`
+does not. `XID1` is the asset-root claim, not lottery identity.
 
 ---
 

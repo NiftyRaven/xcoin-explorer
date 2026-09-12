@@ -45,7 +45,7 @@ Copy examples locally. Never commit `explorer.toml`.
 | --- | --- |
 | Home | Height, supply, latest blocks, live lottery |
 | Blocks | Every height; coinbase lottery payouts from height 1 |
-| Transaction | Inputs, outputs, assets, identity claims (`XID1`) |
+| Transaction | Inputs, outputs, assets; coinbase identity is `XVA1` `@handle` (not `XID1`) |
 | Address | XFER balance, assets, lottery wins |
 | Assets | Identity roots, `NAME/CHILD` subs, `NAME#tag` uniques |
 | Lottery | Live draw, active `@handles`, history, leaderboard |

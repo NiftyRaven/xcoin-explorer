@@ -281,6 +281,100 @@ def parse_xid1(script: bytes) -> str | None:
     return handle.lower().lstrip("@")
 
 
+def _vout_atoms(value) -> int:
+    """RPC coin amounts are XFER floats; ints are treated as already-atoms."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    from explorer.amounts import xfer_to_atoms
+
+    return xfer_to_atoms(value)
+
+
+def coinbase_lottery(vouts: list[dict], network: str = "main") -> dict:
+    """XVA1 hat + value>0 payees. Winner is who got paid, matched by Hash160(script).
+
+    XID1 is the asset-root claim — never lottery identity.
+    """
+    id_to_handle: dict[str, str] = {}
+    xva: list[dict] = []
+    xhb1: list[str] = []
+    xid1 = None
+    parsed_rows: list[tuple[dict, dict, str, dict]] = []
+
+    for vout in vouts or []:
+        spk = vout.get("scriptPubKey") or {}
+        hexscript = spk.get("hex") or ""
+        parsed = parse_vout_script(hexscript, network) if hexscript else {}
+        parsed_rows.append((vout, spk, hexscript, parsed))
+        if parsed.get("xid1"):
+            xid1 = parsed["xid1"]
+        if parsed.get("xhb1"):
+            xhb1 = [str(i).lower() for i in parsed["xhb1"]]
+        if parsed.get("xva1"):
+            for row in parsed["xva1"]:
+                nid = (row.get("node_id") or "").lower()
+                handle = (row.get("handle") or "").lower().lstrip("@")
+                if nid and handle:
+                    id_to_handle[nid] = handle
+                    xva.append({"handle": handle, "node_id": nid})
+
+    winners: list[dict] = []
+    rank = 0
+    for vout, spk, hexscript, parsed in parsed_rows:
+        atoms = _vout_atoms(vout.get("value"))
+        if atoms <= 0:
+            continue
+        st = (spk.get("type") or parsed.get("script_type") or "")
+        if st in ("nulldata", "nonstandard") or parsed.get("script_type") == "nulldata":
+            continue
+        if parsed.get("xhb1") or parsed.get("xva1") or parsed.get("xid1"):
+            continue
+        if hexscript:
+            try:
+                if is_op_return(bytes.fromhex(hexscript)):
+                    continue
+            except ValueError:
+                continue
+        node_id = lottery_node_id_from_script_hex(hexscript) if hexscript else None
+        handle = id_to_handle.get((node_id or "").lower()) if node_id else None
+        addresses = spk.get("addresses") or []
+        address = addresses[0] if addresses else parsed.get("address")
+        winners.append(
+            {
+                "rank": rank,
+                "node_id": node_id,
+                "address": address,
+                "amount": atoms,
+                "xaccount": handle,
+                "is_producer": 1 if rank == 0 else 0,
+            }
+        )
+        rank += 1
+
+    handles: list[str] = []
+    seen: set[str] = set()
+    for row in xva:
+        h = row["handle"]
+        if h and h not in seen:
+            seen.add(h)
+            handles.append(h)
+
+    winner_handle = winners[0]["xaccount"] if winners else None
+    return {
+        "xva": xva,
+        "xhb1": xhb1,
+        "id_to_handle": id_to_handle,
+        "winners": winners,
+        "handles": handles,
+        "winner_handle": winner_handle,
+        "xid1": xid1,
+    }
+
+
 # --- Asset payload (RIP-2) ---------------------------------------------------
 
 
