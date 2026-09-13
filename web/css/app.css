@@ -142,3 +142,111 @@ tr:hover td { background: rgba(255,255,255,0.015); }
   border: 1px solid #4a3b1e; background: rgba(226, 179, 74, 0.06); color: var(--gold2);
   padding: 12px 14px; border-radius: 12px; margin-bottom: 16px; font-size: 13px;
 }
+
+.crumb { color: var(--faint); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 8px; }
+.badge.ipfs { color: #c4b5fd; border-color: #4c3d7a; background: rgba(139, 92, 246, 0.12); }
+.click-rows tr[data-href] { cursor: pointer; }
+
+.asset-hero {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.15fr) minmax(260px, 0.85fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media (max-width: 900px) { .asset-hero { grid-template-columns: 1fr; } }
+
+.media-card { padding: 0; overflow: hidden; }
+.media-stage {
+  min-height: 380px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(900px 280px at 50% 0%, rgba(76, 141, 255, 0.1), transparent 55%),
+    linear-gradient(180deg, #0b0f18, #080a10);
+}
+.media-stage.video { min-height: 0; background: #000; }
+.media-stage video {
+  width: 100%;
+  max-height: 540px;
+  background: #000;
+  outline: none;
+}
+.media-frame {
+  margin: 0;
+  min-height: 380px;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background:
+    radial-gradient(900px 280px at 50% 0%, rgba(76, 141, 255, 0.08), transparent 55%),
+    linear-gradient(180deg, #0b0f18, #080a10);
+}
+.media-frame img {
+  max-width: 100%;
+  max-height: 520px;
+  border-radius: 14px;
+  object-fit: contain;
+  cursor: zoom-in;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.5);
+}
+.media-caption {
+  padding: 12px 18px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+.media-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 48px 24px;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+}
+.media-text {
+  margin: 0;
+  padding: 18px;
+  max-height: 480px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.nft-name { margin: 0 0 8px; font-size: 20px; }
+.asset-desc { color: var(--text); line-height: 1.55; white-space: pre-wrap; }
+.attr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.attr {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.attr span {
+  display: block;
+  color: var(--faint);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.attr b { font-weight: 500; }
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: none;
+  place-items: center;
+  padding: 28px;
+  background: rgba(4, 6, 10, 0.88);
+  cursor: zoom-out;
+}
+.lightbox.on { display: grid; }
+.lightbox img {
+  max-width: min(96vw, 1400px);
+  max-height: 92vh;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}

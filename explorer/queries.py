@@ -7,6 +7,7 @@ from typing import Any
 from explorer.chain import BURN_ADDRESSES_MAIN, circulating_supply, halving_interval_for_network, subsidy_at, winner_count
 from explorer.db import Database
 from explorer.decode import classify_search
+from explorer.ipfs import attach_ipfs_fields
 
 
 def row_to_dict(row) -> dict[str, Any]:
@@ -274,7 +275,7 @@ class Queries:
             f"SELECT * FROM assets WHERE {where_sql} ORDER BY created_height DESC, name LIMIT ? OFFSET ?",
             [*args, limit, offset],
         ).fetchall()
-        return {"total": total, "items": [row_to_dict(r) for r in rows]}
+        return {"total": total, "items": [attach_ipfs_fields(row_to_dict(r)) for r in rows]}
 
     def asset(self, name: str, limit: int = 50) -> dict | None:
         row = self.db.conn.execute("SELECT * FROM assets WHERE name=?", (name,)).fetchone()
@@ -312,7 +313,16 @@ class Queries:
             "SELECT COUNT(DISTINCT address) AS c FROM utxos WHERE asset=? AND asset_amount>0",
             (asset["name"],),
         ).fetchone()["c"]
-        return asset
+        return attach_ipfs_fields(asset)
+
+    def store_ipfs(self, name: str, cid: str) -> None:
+        if not name or not cid:
+            return
+        self.db.conn.execute(
+            "UPDATE assets SET ipfs=COALESCE(NULLIF(ipfs,''), ?) WHERE name=?",
+            (cid, name),
+        )
+        self.db.commit()
 
     def lottery_history(self, limit: int = 40, before: int | None = None) -> list[dict]:
         limit = paginate(limit, 40)

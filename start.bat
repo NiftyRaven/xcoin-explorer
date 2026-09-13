@@ -23,6 +23,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 call .venv\Scripts\activate.bat
+set PYTHONIOENCODING=utf-8
 python -m pip install -q -r requirements.txt
 echo.
 echo Starting XFER Explorer at http://127.0.0.1:8080

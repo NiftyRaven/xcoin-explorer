@@ -14,16 +14,19 @@ The explorer cannot log in to the wallet.
 Task Manager (Ctrl+Shift+Esc) should show **xcoin-qt** (GUI) **or**
 **xcoind** (no window) — not both.
 
-### 2. Did you set `server=1`?
+### 2. Did you set `server=1` in the file 1.0.13 reads?
 
-Open `%APPDATA%\XCoin\xcoin.conf` (Win+R → `%APPDATA%\XCoin`).
-The file must contain a line that is exactly:
+X Coin **1.0.13** double-click reads `xcoin.conf` **next to**
+`X Coin Wallet.exe`, not only `%APPDATA%\XCoin\xcoin.conf`.
+
+Open both (if they exist) and add a line that is exactly:
 
 ```
 server=1
 ```
 
-No `#` in front of it. Save. Restart the wallet.
+No `#` in front of it. Save. Fully quit the wallet, start it once.
+In PowerShell, `netstat -ano | findstr 38442` should show LISTENING.
 
 ### 3. Cookie missing
 
@@ -58,8 +61,8 @@ one wallet.
 ### 5. Cookie still flaky — use a password
 
 Follow **Optional: password instead of cookie** in [SETUP.md](SETUP.md).
-Username and password must match in **both** `xcoin.conf` and
-`explorer.toml`.
+Username and password must match in the `xcoin.conf` next to
+**X Coin Wallet.exe** (1.0.13) **and** `explorer.toml`.
 
 ---
 

@@ -12,7 +12,7 @@ source .venv/bin/activate
 python -m pip install -q -r requirements.txt
 echo
 echo "Starting XFER Explorer at http://127.0.0.1:8080"
-echo "Keep the X Coin wallet/node running with server=1"
+echo "Keep X Coin 1.0.13+ running with server=1 (see START HERE.txt)"
 echo "Guide: docs/SETUP.md"
 echo
 exec python -m explorer "$@"

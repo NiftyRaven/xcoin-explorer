@@ -1,16 +1,28 @@
 # =============================================================================
 # Add these lines to the X Coin *wallet* config — not this explorer folder.
 #
-# Windows (main):     %APPDATA%\XCoin\xcoin.conf
-#   How to open that folder:  Win+R  →  type  %APPDATA%\XCoin  →  Enter
-# Linux (main):       ~/.xcoin/xcoin.conf
-# Practice / regtest: the same path plus  \regtest\  or  /regtest/
+# X Coin 1.0.13+ reads the xcoin.conf NEXT TO the wallet start when you
+# double-click. Put server=1 in BOTH places if both files exist:
+#
+#   1) Next to "X Coin Wallet.exe" / "X Coin Wallet"
+#      (the folder you extracted from the 1.0.13 zip / tarball)
+#   2) Data folder
+#      Windows:  %APPDATA%\XCoin\xcoin.conf
+#                Win+R  →  type  %APPDATA%\XCoin  →  Enter
+#      Linux:    ~/.xcoin/xcoin.conf
+#
+# Practice / regtest: the data path plus  \regtest\  or  /regtest/
 #
 # Then fully quit the wallet and open it once.
+# Never put your 12-word seed, OAuth tokens, or a real password in git.
 # =============================================================================
 
 # Lets this explorer read blocks (required)
 server=1
+
+# Keep RPC on this computer only
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
 
 # Optional but useful. If the wallet already ran without these, leave them
 # off until you know you can reindex. The explorer can still index confirmed
@@ -19,8 +31,9 @@ server=1
 #assetindex=1
 
 # --- Only if cookie login fails ---
-# Pick your own username and a long password. Copy the SAME two values into
-# explorer.toml  (rpc.user / rpc.password). Never share them.
+# Pick your own username and a long password. Put the SAME two values in
+# the wallet xcoin.conf the 1.0.13 start actually reads (usually the file
+# next to X Coin Wallet.exe) AND in a local explorer.toml
+# (rpc.user / rpc.password). Never share them. Never commit explorer.toml.
 #rpcuser=YOUR_RPC_USERNAME
 #rpcpassword=YOUR_LONG_RANDOM_PASSWORD
-#rpcallowip=127.0.0.1

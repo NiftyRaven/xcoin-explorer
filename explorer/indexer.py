@@ -16,6 +16,7 @@ from explorer.chain import (
 from explorer.db import Database
 from explorer.decode import (
     coinbase_lottery,
+    normalize_ipfs,
     parse_vout_script,
     seed_for_draw,
     select_winners,
@@ -501,7 +502,7 @@ class Indexer:
                     "type_name": classify_asset_name(rpc_asset.get("name") or ""),
                     "units": None,
                     "reissuable": None,
-                    "ipfs": rpc_asset.get("message") or "",
+                    "ipfs": normalize_ipfs(rpc_asset.get("message") or "") or (rpc_asset.get("message") or ""),
                 }
             elif parsed.get("asset"):
                 asset_info = parsed["asset"]
@@ -663,7 +664,7 @@ class Indexer:
                 int(asset.get("amount") or 0),
                 asset.get("units") or 0,
                 1 if asset.get("reissuable") else 0,
-                asset.get("ipfs") or "",
+                normalize_ipfs(asset.get("ipfs") or "") or (asset.get("ipfs") or ""),
                 height if asset.get("kind") in ("new", "owner") else None,
                 txid if asset.get("kind") in ("new", "owner") else None,
                 address,

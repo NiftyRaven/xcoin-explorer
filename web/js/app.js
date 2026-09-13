@@ -36,6 +36,93 @@ function atomsToXfer(atoms) {
   return `${sign}${body} XFER`;
 }
 
+function formatAssetAmount(atoms, name, units) {
+  const n = Number(atoms || 0);
+  const sign = n < 0 ? "-" : "";
+  const a = Math.abs(n);
+  const u = Number(units);
+  const decimals = Number.isFinite(u) ? Math.min(8, Math.max(0, u)) : 8;
+  const whole = Math.floor(a / 1e8);
+  const fracNum = a % 1e8;
+  let body;
+  if (decimals === 0) {
+    body = whole.toLocaleString();
+  } else {
+    const frac = String(fracNum).padStart(8, "0").slice(0, decimals).replace(/0+$/, "");
+    body = frac ? `${whole.toLocaleString()}.${frac}` : whole.toLocaleString();
+  }
+  return `${sign}${body}${name ? " " + name : ""}`;
+}
+
+function normalizeIpfsClient(value) {
+  if (!value) return "";
+  let s = String(value).trim();
+  if (s.startsWith("ipfs://")) s = s.slice(7);
+  if (s.startsWith("/ipfs/")) s = s.slice(6);
+  s = s.split("/")[0].split("?")[0];
+  if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(s)) return s;
+  if (/^baf[a-z2-7]{50,}$/.test(s)) return s;
+  return "";
+}
+
+function assetCid(a) {
+  return a.ipfs_cid
+    || normalizeIpfsClient(a.ipfs)
+    || normalizeIpfsClient(a.rpc && (a.rpc.ipfs_hash || a.rpc.ipfs || a.rpc.message))
+    || "";
+}
+
+function defaultGateways(cid) {
+  return [
+    "https://gateway.pinata.cloud/ipfs/" + cid,
+    "https://dweb.link/ipfs/" + cid,
+    "https://w3s.link/ipfs/" + cid,
+    "https://cloudflare-ipfs.com/ipfs/" + cid,
+    "https://ipfs.io/ipfs/" + cid,
+  ];
+}
+
+function ipfsSources(cid, extra) {
+  const seen = new Set();
+  const out = [];
+  const add = (u) => {
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+  add("/api/ipfs/content/" + encodeURIComponent(cid));
+  (extra || []).forEach(add);
+  defaultGateways(cid).forEach(add);
+  return out;
+}
+
+function mediaSrc(ref) {
+  if (!ref) return "";
+  if (typeof ref === "object") {
+    if (ref.cid) return ipfsSources(ref.cid)[0];
+    if (ref.src) return ref.src;
+    return "";
+  }
+  if (/^https?:\/\//i.test(ref)) return ref;
+  const cid = normalizeIpfsClient(ref);
+  return cid ? ipfsSources(cid)[0] : "";
+}
+
+function mediaFallbacks(ref, extra) {
+  if (ref && typeof ref === "object" && ref.cid) return ipfsSources(ref.cid, extra);
+  const cid = normalizeIpfsClient(typeof ref === "string" ? ref : "");
+  return cid ? ipfsSources(cid, extra) : [];
+}
+
+function fallbackAttr(urls) {
+  if (!urls || urls.length < 2) return "";
+  return ` data-fallbacks="${esc(JSON.stringify(urls.slice(1)))}"`;
+}
+
+function yesNo(v) {
+  return v ? "yes" : "no";
+}
+
 function timeAgo(ts) {
   if (!ts) return "—";
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -69,7 +156,12 @@ function setNav() {
   const hash = location.hash || "#/";
   document.querySelectorAll(".nav a").forEach((a) => {
     const href = a.getAttribute("href");
-    a.classList.toggle("active", href === "#/" ? hash === "#/" : hash.startsWith(href));
+    a.classList.toggle(
+      "active",
+      href === "#/"
+        ? hash === "#/"
+        : hash.startsWith(href) || (href === "#/assets" && hash.startsWith("#/asset/"))
+    );
   });
 }
 
@@ -79,11 +171,73 @@ function copyable(text) {
 
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-copy]");
-  if (!el) return;
-  navigator.clipboard.writeText(el.dataset.copy).catch(() => {});
-  el.classList.add("ok");
-  setTimeout(() => el.classList.remove("ok"), 600);
+  if (el) {
+    navigator.clipboard.writeText(el.dataset.copy).catch(() => {});
+    el.classList.add("ok");
+    setTimeout(() => el.classList.remove("ok"), 600);
+    return;
+  }
+  const shot = e.target.closest("[data-lightbox]");
+  if (shot) {
+    openLightbox(shot.getAttribute("data-lightbox") || shot.getAttribute("src"), shot.getAttribute("alt") || "");
+    return;
+  }
+  if (e.target.closest("[data-lightbox-close]")) {
+    closeLightbox();
+    return;
+  }
+  if (e.target.closest("a, button, input, label, [data-copy]")) return;
+  const row = e.target.closest("[data-href]");
+  if (row) location.hash = row.getAttribute("data-href");
 });
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeLightbox();
+});
+
+document.addEventListener("error", (e) => {
+  const el = e.target;
+  if (!el || !el.closest || !el.closest("#asset-media")) return;
+  if (el.tagName !== "IMG" && el.tagName !== "VIDEO") return;
+  let extras = [];
+  try { extras = JSON.parse(el.dataset.fallbacks || "[]"); } catch { extras = []; }
+  if (extras.length) {
+    const next = extras.shift();
+    el.dataset.fallbacks = JSON.stringify(extras);
+    el.src = next;
+    if (el.hasAttribute("data-lightbox")) el.setAttribute("data-lightbox", next);
+    return;
+  }
+  if (el.tagName === "IMG" && !el.dataset.triedVideo) {
+    const cid = el.getAttribute("alt") || "";
+    const urls = ipfsSources(normalizeIpfsClient(cid) || cid);
+    if (urls.length && normalizeIpfsClient(cid)) {
+      const stage = el.closest("#asset-media");
+      stage.innerHTML = `<div class="media-stage video"><video controls playsinline src="${esc(urls[0])}"${fallbackAttr(urls)}></video></div>`;
+      return;
+    }
+  }
+  const stage = el.closest("#asset-media");
+  if (stage && !stage.querySelector(".media-empty")) {
+    stage.innerHTML = `<div class="media-stage">${ipfsUnavailable("Could not render this IPFS object. Use a gateway link below.")}</div>`;
+  }
+}, true);
+
+function openLightbox(src, alt) {
+  closeLightbox();
+  if (!src) return;
+  const box = document.createElement("div");
+  box.className = "lightbox on";
+  box.id = "lightbox";
+  box.setAttribute("data-lightbox-close", "1");
+  box.innerHTML = `<img src="${esc(src)}" alt="${esc(alt)}" />`;
+  document.body.appendChild(box);
+}
+
+function closeLightbox() {
+  const box = $("#lightbox");
+  if (box) box.remove();
+}
 
 async function refreshStatus() {
   try {
@@ -290,10 +444,10 @@ async function pageTx(id) {
     return;
   }
   const vin = (t.vin || []).map((v) => `<div>${v.coinbase ? `<span class="badge lottery">coinbase</span>` : linkAddr(v.address)}
-    <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + atomsToXfer(v.asset_amount) : atomsToXfer(v.value)}</div>
+    <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + formatAssetAmount(v.asset_amount, v.asset) : atomsToXfer(v.value)}</div>
     ${v.spent_txid ? `<div class="faint">from ${linkTx(v.spent_txid)}:${v.spent_n}</div>` : ""}</div>`).join("");
   const vout = (t.vout || []).map((v) => `<div>${v.script_type === "nulldata" ? `<span class="badge">OP_RETURN</span>` : linkAddr(v.address)}
-    <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + atomsToXfer(v.asset_amount) + ` <span class="badge asset">${esc(v.asset_kind || "")}</span>` : atomsToXfer(v.value)}</div></div>`).join("");
+    <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + formatAssetAmount(v.asset_amount, v.asset) + ` <span class="badge asset">${esc(v.asset_kind || "")}</span>` : atomsToXfer(v.value)}</div></div>`).join("");
   app.innerHTML = `
     <h1 class="page-title">Transaction</h1>
     <p class="sub">${copyable(t.txid)}</p>
@@ -333,7 +487,7 @@ async function pageAddress(addr) {
       <div>
         <div class="card" style="margin-bottom:16px">
           <h2>Assets</h2>
-          ${(a.assets || []).map((x) => `<div class="winner"><div>${linkAsset(x.name)}</div><div class="amt">${atomsToXfer(x.amount)}</div></div>`).join("") || `<div class="empty">No assets.</div>`}
+          ${(a.assets || []).map((x) => `<div class="winner"><div>${linkAsset(x.name)}</div><div class="amt">${formatAssetAmount(x.amount, x.name)}</div></div>`).join("") || `<div class="empty">No assets.</div>`}
         </div>
         <div class="card">
           <h2>Lottery</h2>
@@ -347,40 +501,206 @@ async function pageAssets() {
   const data = await api("/assets?limit=80");
   app.innerHTML = `
     <h1 class="page-title">Assets</h1>
-    <p class="sub">Identity roots are protocol-assigned from Sign in with X. Subs are NAME/CHILD. Uniques are NAME#tag.</p>
+    <p class="sub">Identity roots are protocol-assigned from Sign in with X. Subs are NAME/CHILD. Uniques are NAME#tag. Click an asset to open its page and IPFS media.</p>
     <div class="card">
-      <table>
-        <thead><tr><th>Name</th><th>Kind</th><th>Amount</th><th>X</th><th>Created</th></tr></thead>
+      <table class="click-rows">
+        <thead><tr><th>Name</th><th>Kind</th><th>Amount</th><th>IPFS</th><th>X</th><th>Created</th></tr></thead>
         <tbody>
-          ${(data.items || []).map((a) => `<tr>
+          ${(data.items || []).map((a) => `<tr data-href="#/asset/${encodeURIComponent(a.name)}">
             <td>${linkAsset(a.name)}</td>
             <td><span class="badge asset">${esc(a.kind || "")}</span></td>
-            <td>${atomsToXfer(a.amount)}</td>
+            <td>${formatAssetAmount(a.amount, a.name, a.units)}</td>
+            <td>${a.has_ipfs || a.ipfs_cid || a.ipfs ? `<span class="badge ipfs">IPFS</span>` : `<span class="faint">—</span>`}</td>
             <td>${a.x_handle ? handle(a.x_handle) : "—"}</td>
             <td>${a.created_height != null ? linkBlock(a.created_height) : "—"}</td>
-          </tr>`).join("") || `<tr><td colspan="5" class="empty">No assets yet.</td></tr>`}
+          </tr>`).join("") || `<tr><td colspan="6" class="empty">No assets yet.</td></tr>`}
         </tbody>
       </table>
     </div>`;
 }
 
+function gatewayLinks(cid, extra) {
+  const urls = (extra && extra.length ? extra : defaultGateways(cid)).filter((u) => /^https?:\/\//i.test(u));
+  return urls.map((u) => {
+    let host = u;
+    try { host = new URL(u).hostname; } catch { /* keep raw */ }
+    return `<a href="${esc(u)}" target="_blank" rel="noreferrer">${esc(host)}</a>`;
+  }).join(" · ");
+}
+
+function renderNftAttributes(attrs) {
+  if (!attrs || !attrs.length) return "";
+  const cells = attrs.map((at) => {
+    if (at == null) return "";
+    if (typeof at !== "object") return `<div class="attr"><b>${esc(at)}</b></div>`;
+    const label = at.trait_type || at.traitType || at.type || at.name || "trait";
+    const value = at.value ?? at.val ?? "";
+    return `<div class="attr"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
+  }).join("");
+  return `<div class="card" style="margin-bottom:16px"><h2>Attributes</h2><div class="attr-grid">${cells}</div></div>`;
+}
+
+function ipfsUnavailable(message) {
+  return `<div class="media-empty"><span class="badge">IPFS</span><p>${esc(message)}</p></div>`;
+}
+
+function renderMediaStage(info, cid) {
+  if (!info) {
+    return `
+      <div class="media-stage">
+        <div class="media-empty">
+          <span class="badge ipfs">IPFS</span>
+          <p>Resolving ${copyable(cid)}…</p>
+        </div>
+      </div>`;
+  }
+  const nft = info.nft || {};
+  const poster = mediaSrc(nft.image);
+  const anim = mediaSrc(nft.animation);
+  const audio = mediaSrc(nft.audio);
+  if (info.kind === "video" || (info.kind === "json" && anim)) {
+    const srcs = info.kind === "video" ? ipfsSources(cid, info.gateways) : mediaFallbacks(nft.animation, info.gateways);
+    const src = srcs[0] || (info.kind === "video" ? info.url : anim);
+    return `
+      <div class="media-stage video">
+        <video controls playsinline preload="metadata"${poster ? ` poster="${esc(poster)}"` : ""} src="${esc(src)}"${fallbackAttr(srcs)}></video>
+      </div>`;
+  }
+  if (info.kind === "image" || poster) {
+    const srcs = info.kind === "image" ? ipfsSources(cid, info.gateways) : mediaFallbacks(nft.image, info.gateways);
+    const src = srcs[0] || (info.kind === "image" ? info.url : poster);
+    const alt = nft.name || cid;
+    return `
+      <figure class="media-frame">
+        <img src="${esc(src)}" alt="${esc(alt)}" data-lightbox="${esc(src)}"${fallbackAttr(srcs)} />
+      </figure>`;
+  }
+  if (info.kind === "audio" || audio) {
+    const src = info.kind === "audio" ? (ipfsSources(cid)[0] || info.url) : audio;
+    return `
+      <div class="media-stage">
+        <div class="media-empty">
+          <audio controls src="${esc(src)}"></audio>
+        </div>
+      </div>`;
+  }
+  if (info.kind === "json") {
+    return `<div class="media-stage">${ipfsUnavailable("IPFS document has no image or video.")}</div>`;
+  }
+  if (info.kind === "text") {
+    return `<pre class="media-text">${esc(info.text || "")}</pre>`;
+  }
+  return `
+    <div class="media-stage">
+      <div class="media-empty">
+        <span class="badge">${esc(info.content_type || "file")}</span>
+        <p><a href="${esc(info.url)}" target="_blank" rel="noreferrer">Open IPFS content</a></p>
+      </div>
+    </div>`;
+}
+
+function showGatewayImage(cid, urls) {
+  const srcs = urls && urls.length ? urls : ipfsSources(cid);
+  return `
+    <figure class="media-frame">
+      <img src="${esc(srcs[0])}" alt="${esc(cid)}" data-lightbox="${esc(srcs[0])}"${fallbackAttr(srcs)} />
+    </figure>`;
+}
+
+async function loadAssetMedia(cid, gateways) {
+  const stage = $("#asset-media");
+  const metaBox = $("#asset-nft");
+  if (!stage) return;
+  const urls = ipfsSources(cid, gateways);
+  try {
+    const info = await api("/ipfs/inspect?cid=" + encodeURIComponent(cid));
+    stage.innerHTML = renderMediaStage(info, cid);
+    const poster = mediaSrc((info.nft || {}).image);
+    const vid = stage.querySelector("video");
+    if (vid && poster) {
+      vid.addEventListener("error", () => {
+        if (advanceIfPossible(vid)) return;
+        stage.innerHTML = showGatewayImage(cid, mediaFallbacks((info.nft || {}).image, urls));
+      });
+    }
+    const cap = $("#asset-media-cap");
+    if (cap) {
+      cap.innerHTML = `${esc(info.kind)} · ${esc(info.content_type || "")} · ${gatewayLinks(cid, info.gateways || gateways)}`;
+    }
+    if (metaBox && info.nft) {
+      const nft = info.nft;
+      const desc = nft.description ? `<p class="asset-desc">${esc(nft.description)}</p>` : "";
+      const title = nft.name ? `<h3 class="nft-name">${esc(nft.name)}</h3>` : "";
+      const ext = nft.external_url ? `<p><a href="${esc(nft.external_url)}" target="_blank" rel="noreferrer">${esc(nft.external_url)}</a></p>` : "";
+      metaBox.innerHTML = (title || desc || ext || (nft.attributes || []).length)
+        ? `${title}${desc}${ext}${renderNftAttributes(nft.attributes)}`
+        : "";
+    }
+  } catch (e) {
+    stage.innerHTML = showGatewayImage(cid, urls);
+    const cap = $("#asset-media-cap");
+    if (cap) cap.innerHTML = `${gatewayLinks(cid, gateways || urls)}`;
+  }
+}
+
+function advanceIfPossible(el) {
+  let extras = [];
+  try { extras = JSON.parse(el.dataset.fallbacks || "[]"); } catch { extras = []; }
+  if (!extras.length) return false;
+  const next = extras.shift();
+  el.dataset.fallbacks = JSON.stringify(extras);
+  el.src = next;
+  return true;
+}
+
 async function pageAsset(name) {
   const a = await api("/asset/" + encodeURIComponent(name));
   const meta = a.rpc || {};
+  const units = meta.units ?? a.units ?? 0;
+  const amountAtoms = meta.amount != null ? Math.round(Number(meta.amount) * 1e8) : a.amount;
+  const cid = assetCid(a);
+  const created = a.created_height != null ? linkBlock(a.created_height) : "—";
   app.innerHTML = `
+    <p class="crumb"><a href="#/assets">Assets</a> / ${esc(a.name)}</p>
     <h1 class="page-title">${esc(a.name)}</h1>
-    <p class="sub"><span class="badge asset">${esc(a.kind)}</span> ${a.x_handle ? handle(a.x_handle) : ""} ${a.identity?.address ? linkAddr(a.identity.address) : ""}</p>
-    <div class="grid stats">
-      <div class="card stat"><span>Amount</span><b>${atomsToXfer(meta.amount != null ? Math.round(meta.amount * 1e8) : a.amount)}</b></div>
-      <div class="card stat"><span>Holders</span><b>${a.holder_count ?? (a.holders || []).length}</b></div>
-      <div class="card stat"><span>Units</span><b>${meta.units ?? a.units ?? 0}</b></div>
-      <div class="card stat"><span>Reissuable</span><b>${(meta.reissuable ?? a.reissuable) ? "yes" : "no"}</b></div>
+    <p class="sub">
+      <span class="badge asset">${esc(a.kind || "")}</span>
+      ${cid ? `<span class="badge ipfs">IPFS</span>` : ""}
+      ${a.x_handle ? handle(a.x_handle) : ""}
+      ${a.identity?.address ? linkAddr(a.identity.address) : ""}
+    </p>
+    <div class="asset-hero">
+      <div class="card media-card">
+        <div id="asset-media">${cid ? renderMediaStage(null, cid) : `
+          <div class="media-stage">
+            <div class="media-empty">
+              <span class="badge">no IPFS</span>
+              <p>This asset has no IPFS hash on chain.</p>
+            </div>
+          </div>`}</div>
+        <div class="media-caption" id="asset-media-cap">${cid ? `CID ${copyable(cid)} · ${gatewayLinks(cid, a.ipfs_gateways)}` : "No media attached."}</div>
+      </div>
+      <div class="card">
+        <h2>Asset</h2>
+        <div class="kv">
+          <b>Name</b><div>${esc(a.name)}</div>
+          <b>Kind</b><div>${esc(a.kind || "—")}</div>
+          <b>Amount</b><div>${formatAssetAmount(amountAtoms, a.name, units)}</div>
+          <b>Holders</b><div>${a.holder_count ?? (a.holders || []).length}</div>
+          <b>Units</b><div>${esc(units)}</div>
+          <b>Reissuable</b><div>${yesNo(meta.reissuable ?? a.reissuable)}</div>
+          <b>Created</b><div>${created}${a.created_txid ? " · " + linkTx(a.created_txid) : ""}</div>
+          <b>Issuer</b><div>${a.issuer ? linkAddr(a.issuer) : "—"}</div>
+          <b>IPFS</b><div>${cid ? copyable(cid) : `<span class="faint">none</span>`}</div>
+        </div>
+      </div>
     </div>
-    <div class="grid two" style="margin-top:16px">
+    <div id="asset-nft"></div>
+    <div class="grid two">
       <div class="card">
         <h2>Holders</h2>
         <table>
-          ${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${atomsToXfer(h.amount)}</td></tr>`).join("") || `<tr><td class="empty">No holders in the UTXO index.</td></tr>`}
+          ${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td class="empty">No holders in the UTXO index.</td></tr>`}
         </table>
       </div>
       <div class="card">
@@ -390,6 +710,7 @@ async function pageAsset(name) {
         </table>
       </div>
     </div>`;
+  if (cid) loadAssetMedia(cid, a.ipfs_gateways);
 }
 
 async function pageIdentity(handleName) {

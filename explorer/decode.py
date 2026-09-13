@@ -389,6 +389,19 @@ class AssetOut:
     type_name: str = ""
 
 
+def _read_compact_size(buf: bytes, i: int) -> tuple[int, int]:
+    if i >= len(buf):
+        raise ValueError("eof")
+    ln = buf[i]
+    i += 1
+    if ln < 253:
+        return ln, i
+    if ln == 253:
+        n = int.from_bytes(buf[i : i + 2], "little")
+        return n, i + 2
+    raise ValueError("name too long")
+
+
 def _read_cstring(buf: bytes, i: int) -> tuple[str, int]:
     """Asset names are serialized as a compact-size string in Raven scripts.
 
@@ -399,19 +412,86 @@ def _read_cstring(buf: bytes, i: int) -> tuple[str, int]:
 
     Compact size: < 253 as a single byte length.
     """
-    if i >= len(buf):
-        raise ValueError("eof")
-    ln = buf[i]
-    i += 1
-    if ln < 253:
-        n = ln
-    elif ln == 253:
-        n = int.from_bytes(buf[i : i + 2], "little")
-        i += 2
-    else:
-        raise ValueError("name too long")
+    n, i = _read_compact_size(buf, i)
     name = buf[i : i + n].decode("ascii", errors="replace")
     return name, i + n
+
+
+def _read_cbytes(buf: bytes, i: int) -> tuple[bytes, int]:
+    n, i = _read_compact_size(buf, i)
+    return buf[i : i + n], i + n
+
+
+def ipfs_bytes_to_cid(raw: bytes) -> str:
+    """Turn a 34-byte CIDv0 multihash (0x12 0x20 + sha256) into Qm…"""
+    if not raw:
+        return ""
+    if raw[:1] in (b"\x00", b"\x01") and len(raw) >= 35:
+        raw = raw[1:]
+    if len(raw) >= 34 and raw[0] == 0x12 and raw[1] == 0x20:
+        return b58encode(raw[:34])
+    try:
+        text = raw.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return ""
+    return normalize_ipfs(text)
+
+
+def normalize_ipfs(value: str | bytes | None) -> str:
+    """Accept CID, ipfs:// URI, or hex-encoded multihash; return a CID or ''."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        cid = ipfs_bytes_to_cid(value)
+        if cid:
+            return cid
+        try:
+            value = value.decode("ascii")
+        except UnicodeDecodeError:
+            return ipfs_bytes_to_cid(value) or ""
+    s = str(value).strip()
+    if not s or s in ("0", "00"):
+        return ""
+    if s.startswith("ipfs://"):
+        s = s[7:]
+    if s.startswith("/ipfs/"):
+        s = s[6:]
+    s = s.split("/")[0].split("?")[0].strip()
+    if s.startswith("Qm") and 44 <= len(s) <= 52:
+        return s
+    if s.startswith(("bafy", "bafk", "bafz", "bafb")) and len(s) >= 50:
+        return s
+    hexstr = s[2:] if s.lower().startswith("0x") else s
+    if len(hexstr) >= 68 and len(hexstr) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in hexstr):
+        raw = bytes.fromhex(hexstr)
+        if raw and raw[0] == 0x22 and len(raw) >= 35:
+            cid = ipfs_bytes_to_cid(raw[1:35])
+            if cid:
+                return cid
+        idx = raw.find(b"\x12\x20")
+        if idx >= 0 and len(raw) >= idx + 34:
+            cid = ipfs_bytes_to_cid(raw[idx : idx + 34])
+            if cid:
+                return cid
+        return ipfs_bytes_to_cid(raw)
+    return ""
+
+
+def extract_ipfs_from_tail(buf: bytes) -> str:
+    """Find a compact-size or raw 34-byte IPFS hash in leftover script bytes."""
+    if not buf:
+        return ""
+    for i in range(len(buf)):
+        if buf[i] == 0x22 and i + 35 <= len(buf) and buf[i + 1] == 0x12 and buf[i + 2] == 0x20:
+            cid = ipfs_bytes_to_cid(buf[i + 1 : i + 35])
+            if cid:
+                return cid
+    idx = buf.find(b"\x12\x20")
+    if idx >= 0 and len(buf) >= idx + 34:
+        cid = ipfs_bytes_to_cid(buf[idx : idx + 34])
+        if cid:
+            return cid
+    return normalize_ipfs(buf) or normalize_ipfs(buf.hex())
 
 
 def parse_asset_payload(payload: bytes) -> AssetOut | None:
@@ -456,12 +536,15 @@ def parse_asset_payload(payload: bytes) -> AssetOut | None:
             has_ipfs = rest[i]
             i += 1
             if has_ipfs and i < len(rest):
-                ipfs = rest[i:].hex()
+                try:
+                    raw, i = _read_cbytes(rest, i)
+                    ipfs = ipfs_bytes_to_cid(raw) or raw.hex()
+                except (ValueError, IndexError):
+                    ipfs = extract_ipfs_from_tail(rest[i:])
         elif kind in ("transfer", "reissue") and i < len(rest) and rest[i:]:
-            # optional IPFS / message
             extra = rest[i:]
             if extra and extra[0] not in (0,):
-                ipfs = extra.hex()
+                ipfs = extract_ipfs_from_tail(extra)
     except Exception:
         pass
     if kind == "owner" and not name.endswith("!"):

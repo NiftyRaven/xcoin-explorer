@@ -19,6 +19,7 @@ def test_health_and_home(tmp_path: Path):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["coin"] == "XFER"
+    assert r.json()["version"] == "1.1.0"
     status = client.get("/api/status").json()
     assert "indexed_height" in status
     home = client.get("/")
@@ -34,4 +35,7 @@ def test_health_and_home(tmp_path: Path):
     assert "winner_handle" in text
     assert "no XVA1" in text
     assert "linkAddr(w." not in text
+    assert "loadAssetMedia" in text
+    assert "formatAssetAmount" in text
+    assert "pageAsset" in text
     db.close()

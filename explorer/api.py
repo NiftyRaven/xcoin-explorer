@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from explorer import __version__
 from explorer.chain import GENESIS_HASH_MAIN, GENESIS_TIME_MAIN, NAME, SLOT_SECONDS, SUBUNIT, TICKER
+from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.queries import Queries
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -88,7 +89,17 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
 
     @app.get("/api/assets")
     def assets(q: str = "", kind: str = "", limit: int = 50, offset: int = 0):
-        return queries.assets(q, kind, limit, offset)
+        data = queries.assets(q, kind, limit, offset)
+        if rpc.connected:
+            for item in data.get("items") or []:
+                if item.get("ipfs_cid") or item.get("ipfs"):
+                    continue
+                rpc_data = rpc.try_call("getassetdata", item.get("name"), default=None)
+                if isinstance(rpc_data, dict):
+                    attach_ipfs_fields(item, rpc_data)
+                    if item.get("ipfs_cid"):
+                        queries.store_ipfs(item["name"], item["ipfs_cid"])
+        return data
 
     @app.get("/api/asset/{name:path}")
     def asset(name: str, limit: int = 50):
@@ -97,7 +108,39 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
             return JSONResponse({"error": "asset not found"}, status_code=404)
         if rpc.connected:
             a["rpc"] = rpc.try_call("getassetdata", name, default=None)
+        attach_ipfs_fields(a, a.get("rpc") if isinstance(a.get("rpc"), dict) else None)
+        if a.get("ipfs_cid"):
+            queries.store_ipfs(a["name"], a["ipfs_cid"])
         return a
+
+    @app.get("/api/ipfs/inspect")
+    def ipfs_inspect(cid: str = ""):
+        headers = {"Cache-Control": "no-store"}
+        try:
+            return JSONResponse(inspect_cid(cid), headers=headers)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400, headers=headers)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502, headers=headers)
+
+    @app.get("/api/ipfs/content/{cid}")
+    def ipfs_content(cid: str):
+        if not valid_cid(cid):
+            return JSONResponse({"error": "invalid IPFS CID"}, status_code=400)
+        try:
+            body, content_type = fetch_content(cid)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+        return Response(
+            content=body,
+            media_type=content_type or "application/octet-stream",
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.get("/api/lottery")
     def lottery():

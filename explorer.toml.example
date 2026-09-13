@@ -2,7 +2,9 @@
 #
 # 1. Copy this file and name the copy:  explorer.toml
 # 2. Leave user/password empty if your wallet writes a .cookie (usual case).
-# 3. Only fill user/password if you also set the SAME values in xcoin.conf.
+# 3. Only fill user/password if you also set the SAME values in the
+#    xcoin.conf that X Coin 1.0.13 actually reads (next to X Coin Wallet.exe
+#    AND %APPDATA%\XCoin\xcoin.conf / ~/.xcoin/xcoin.conf if both exist).
 #
 # Never commit explorer.toml. It can hold a password.
 

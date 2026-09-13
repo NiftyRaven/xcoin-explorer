@@ -17,7 +17,7 @@ You will do three things:
 | Item | Why |
 | --- | --- |
 | A computer on **Windows** or **Linux** | This is what the wallet supports |
-| The **X Coin wallet** already installed | [github.com/NiftyRaven/x-coin](https://github.com/NiftyRaven/x-coin) |
+| **X Coin wallet 1.0.13+** | [github.com/NiftyRaven/x-coin/releases](https://github.com/NiftyRaven/x-coin/releases) |
 | **Python 3.11 or newer** | Runs the explorer |
 | A web browser | Chrome, Firefox, Edge, … |
 
@@ -67,12 +67,12 @@ git clone https://github.com/NiftyRaven/xcoin-explorer.git
 cd xcoin-explorer
 ```
 
-### Option B — Zip (no Git)
+### Option B — Release zip (easiest, no Git)
 
-1. Open the GitHub page: [github.com/NiftyRaven/xcoin-explorer](https://github.com/NiftyRaven/xcoin-explorer).
-2. Click the green **Code** button → **Download ZIP**.
-3. Right-click the zip → **Extract All**.
-4. Open the folder that appears (`xcoin-explorer-main` or similar).
+1. Open [xcoin-explorer Releases](https://github.com/NiftyRaven/xcoin-explorer/releases).
+2. Download **XFER-Explorer-1.1.0-Windows.zip** (or the Linux zip).
+3. Right-click → **Extract All**.
+4. Open the folder and read **START HERE.txt**.
 
 ---
 
@@ -113,26 +113,35 @@ xdg-open ~/.xcoin
 Practice / “Practice Wallet” uses a subfolder named `regtest`. Main XFER
 uses the folder above, not `regtest`.
 
-### 3c. Edit (or create) `xcoin.conf`
+### 3c. Put `server=1` where 1.0.13 actually reads it
 
-In that folder, look for a file named **`xcoin.conf`**.
+**X Coin 1.0.13** double-click reads the `xcoin.conf` **next to**
+`X Coin Wallet.exe` (Windows) or **X Coin Wallet** (Linux). If that file
+has no `server=1`, port 38442 never opens and the explorer shows
+“node offline”.
 
-- If it exists, open it with Notepad (Windows) or any text editor.
-- If it does not exist, create a new text file named exactly `xcoin.conf`
-  (not `xcoin.conf.txt`). In Notepad: File → Save As → “All files” →
-  name `xcoin.conf`.
+Do this in **every** `xcoin.conf` you have:
 
-Add **this one required line** at the bottom (or copy from
-`config/xcoin.conf.example` in this repo):
+1. The file in the extracted 1.0.13 wallet folder (same folder as the
+   start).
+2. The data-folder file from 3b (`%APPDATA%\XCoin\xcoin.conf` or
+   `~/.xcoin/xcoin.conf`). Create it if it is missing.
+
+Add this line (or copy from `config/xcoin.conf.example`):
 
 ```
 server=1
 ```
 
-Save the file.
+No `#` in front. Save.
 
-That is enough for most people. The wallet will write a secret **cookie**
-file next start. The explorer finds it automatically. You never type it.
+That is enough for most people. The wallet writes a secret **cookie**
+next start (`%APPDATA%\XCoin\.cookie`). The explorer finds it. You never
+type it.
+
+If you later set `rpcuser` / `rpcpassword`, put those lines in the
+**same** 1.0.13 folder `xcoin.conf` the wallet reads, and copy only
+those two values into a local `explorer.toml`. Never commit that file.
 
 ### 3d. Open the wallet **once**
 
@@ -194,7 +203,8 @@ If you see a yellow banner about RPC, read
 Use this only if cookie login keeps failing.
 
 1. Pick a username and a **long random password**. Do not reuse a website password.
-2. In the wallet `xcoin.conf` add:
+2. In the wallet `xcoin.conf` the 1.0.13 start reads (next to
+   **X Coin Wallet.exe**, and the data-folder file if you use both) add:
 
    ```
    server=1

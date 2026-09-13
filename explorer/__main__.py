@@ -35,7 +35,7 @@ def main() -> None:
     app = create_app(queries, indexer, rpc)
 
     url = f"http://{host}:{port}"
-    print(f"X Coin explorer → {url}")
+    print(f"X Coin explorer -> {url}")
     if rpc.connected:
         print(f"Node RPC ok on port {rpc.rpc_port} ({rpc.network})")
     else:
