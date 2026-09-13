@@ -22,6 +22,7 @@ SKIP_FILE_NAMES = {
     "explorer.toml",
     ".env",
     ".cookie",
+    "start-wallet-for-explorer.bat",
 }
 SKIP_SUFFIXES = {".db", ".db-wal", ".db-shm", ".pem", ".key", ".log", ".zip"}
 
