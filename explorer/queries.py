@@ -22,6 +22,10 @@ def paginate(limit: int, default: int = 25, max_n: int = 100) -> int:
     return max(1, min(limit, max_n))
 
 
+def norm_handle(value: str | None) -> str:
+    return (value or "").strip().lower().lstrip("@")
+
+
 class Queries:
     def __init__(self, db: Database):
         self.db = db
@@ -379,6 +383,219 @@ class Queries:
         ).fetchall()
         return [row_to_dict(r) for r in rows]
 
+    def lottery_members(
+        self,
+        q: str = "",
+        scope: str = "eligible",
+        hat_handles: list[str] | None = None,
+        heartbeat_handles: list[str] | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> dict:
+        """Directory of lottery handles: eligible now, or every handle seen in XVA1."""
+        limit = paginate(limit, 200, max_n=1000)
+        try:
+            offset = max(0, int(offset or 0))
+        except (TypeError, ValueError):
+            offset = 0
+        needle = norm_handle(q)
+        scope = "all" if str(scope or "").lower() == "all" else "eligible"
+
+        if hat_handles is None:
+            hat = {norm_handle(r.get("xaccount")) for r in self.last_xva()}
+        else:
+            hat = {norm_handle(h) for h in hat_handles}
+        hat.discard("")
+        beat = {norm_handle(h) for h in (heartbeat_handles or [])}
+        beat.discard("")
+
+        known: dict[str, dict[str, Any]] = {}
+
+        def row_for(handle: str) -> dict[str, Any]:
+            return known.setdefault(
+                handle,
+                {
+                    "handle": handle,
+                    "address": None,
+                    "node_id": None,
+                    "asset": None,
+                    "wins": 0,
+                    "earned": 0,
+                    "hat_blocks": 0,
+                    "first_hat": None,
+                    "last_hat": None,
+                    "last_seen": None,
+                },
+            )
+
+        for r in self.db.conn.execute(
+            "SELECT handle, asset, address, node_id FROM identities"
+        ).fetchall():
+            h = norm_handle(r["handle"])
+            if not h:
+                continue
+            row = row_for(h)
+            row["asset"] = r["asset"] or row["asset"]
+            row["address"] = r["address"] or row["address"]
+            row["node_id"] = r["node_id"] or row["node_id"]
+
+        for r in self.db.conn.execute(
+            "SELECT node_id, address, xaccount, last_seen FROM node_seen"
+        ).fetchall():
+            h = norm_handle(r["xaccount"])
+            if not h:
+                continue
+            row = row_for(h)
+            row["address"] = row["address"] or r["address"]
+            row["node_id"] = row["node_id"] or r["node_id"]
+            row["last_seen"] = r["last_seen"]
+
+        for r in self.db.conn.execute(
+            """
+            SELECT
+                lower(xaccount) AS handle,
+                COUNT(*) AS hat_blocks,
+                MIN(height) AS first_hat,
+                MAX(height) AS last_hat
+            FROM lottery_active
+            WHERE xaccount IS NOT NULL AND TRIM(xaccount) != ''
+            GROUP BY lower(xaccount)
+            """
+        ).fetchall():
+            h = norm_handle(r["handle"])
+            if not h:
+                continue
+            row = row_for(h)
+            row["hat_blocks"] = int(r["hat_blocks"] or 0)
+            row["first_hat"] = r["first_hat"]
+            row["last_hat"] = r["last_hat"]
+
+        for r in self.db.conn.execute(
+            """
+            SELECT
+                lower(xaccount) AS handle,
+                COUNT(*) AS wins,
+                SUM(amount) AS earned
+            FROM lottery_wins
+            WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount) != ''
+            GROUP BY lower(xaccount)
+            """
+        ).fetchall():
+            h = norm_handle(r["handle"])
+            if not h:
+                continue
+            row = row_for(h)
+            row["wins"] = int(r["wins"] or 0)
+            row["earned"] = int(r["earned"] or 0)
+
+        for h in hat | beat:
+            row_for(h)
+
+        items: list[dict[str, Any]] = []
+        eligible_total = 0
+        for handle, row in known.items():
+            in_hat = handle in hat
+            heartbeat = handle in beat
+            eligible = in_hat or heartbeat
+            if eligible:
+                eligible_total += 1
+            if needle and needle not in handle:
+                continue
+            if scope != "all" and not eligible:
+                continue
+            items.append(
+                {
+                    **row,
+                    "in_hat": in_hat,
+                    "heartbeat": heartbeat,
+                    "eligible": eligible,
+                }
+            )
+        items.sort(key=lambda x: (not x["eligible"], -(x.get("wins") or 0), x["handle"]))
+        return {
+            "query": q,
+            "scope": scope,
+            "total": len(items),
+            "eligible_total": eligible_total,
+            "known_total": len(known),
+            "items": items[offset : offset + limit],
+        }
+
+    def handle_profile(
+        self,
+        handle: str,
+        hat_handles: list[str] | None = None,
+        heartbeat_handles: list[str] | None = None,
+    ) -> dict | None:
+        name = norm_handle(handle)
+        if not name or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in name):
+            return None
+        directory = self.lottery_members(
+            q=name,
+            scope="all",
+            hat_handles=hat_handles,
+            heartbeat_handles=heartbeat_handles,
+            limit=50,
+        )
+        member = next((m for m in directory["items"] if m["handle"] == name), None)
+        if member is None:
+            member = {
+                "handle": name,
+                "address": None,
+                "node_id": None,
+                "asset": None,
+                "wins": 0,
+                "earned": 0,
+                "hat_blocks": 0,
+                "first_hat": None,
+                "last_hat": None,
+                "last_seen": None,
+                "in_hat": name in {norm_handle(h) for h in (hat_handles or [])},
+                "heartbeat": name in {norm_handle(h) for h in (heartbeat_handles or [])},
+                "eligible": False,
+            }
+            member["eligible"] = bool(member["in_hat"] or member["heartbeat"])
+        ident = self.db.conn.execute(
+            "SELECT * FROM identities WHERE handle=?", (name,)
+        ).fetchone()
+        wins = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT * FROM lottery_wins
+                WHERE height>=1 AND lower(xaccount)=?
+                ORDER BY height DESC LIMIT 50
+                """,
+                (name,),
+            ).fetchall()
+        ]
+        appearances = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT height, node_id, n
+                FROM lottery_active
+                WHERE lower(xaccount)=?
+                ORDER BY height DESC LIMIT 40
+                """,
+                (name,),
+            ).fetchall()
+        ]
+        return {
+            **member,
+            "found": bool(
+                member.get("hat_blocks")
+                or member.get("wins")
+                or member.get("address")
+                or member.get("eligible")
+                or ident
+                or appearances
+            ),
+            "identity": row_to_dict(ident) if ident else None,
+            "wins_recent": wins,
+            "appearances": appearances,
+        }
+
     def last_xva(self) -> list[dict]:
         """Handles (+ ids) from the last indexed block that carried XVA1."""
         row = self.db.conn.execute(
@@ -456,7 +673,7 @@ class Queries:
             if a:
                 results.append({"type": "address", "id": raw, "label": raw})
         if kind in ("handle", "query", "asset"):
-            handle = raw.lstrip("@").lower()
+            handle = norm_handle(raw)
             ident = self.db.conn.execute(
                 "SELECT * FROM identities WHERE handle=?", (handle,)
             ).fetchone()
@@ -470,6 +687,24 @@ class Queries:
                         "address": ident["address"],
                     }
                 )
+            if handle:
+                seen_ids = {r["id"] for r in results if r.get("type") == "identity"}
+                for item in self.lottery_members(q=handle, scope="all", limit=8).get("items") or []:
+                    hid = item.get("handle")
+                    if not hid or hid in seen_ids:
+                        continue
+                    if handle != hid and handle not in hid:
+                        continue
+                    results.append(
+                        {
+                            "type": "identity",
+                            "id": hid,
+                            "label": f"@{hid}",
+                            "eligible": bool(item.get("eligible")),
+                            "wins": item.get("wins") or 0,
+                        }
+                    )
+                    seen_ids.add(hid)
             name = raw.upper().lstrip("@")
             assets = self.db.conn.execute(
                 "SELECT name, kind FROM assets WHERE name=? OR name LIKE ? LIMIT 8",

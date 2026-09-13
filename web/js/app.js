@@ -160,7 +160,9 @@ function setNav() {
       "active",
       href === "#/"
         ? hash === "#/"
-        : hash.startsWith(href) || (href === "#/assets" && hash.startsWith("#/asset/"))
+        : hash.startsWith(href)
+          || (href === "#/assets" && hash.startsWith("#/asset/"))
+          || (href === "#/members" && hash.startsWith("#/identity/"))
     );
   });
 }
@@ -321,7 +323,10 @@ function lotteryCard(live, nodes, winnerHandles) {
       <div class="countdown" id="cd">—:—</div>
       <p class="muted">Height ${L.height ?? "—"} · slot ${slot ?? "—"} · ${activeN} active · ${L.winner_count ?? 1} winner(s)</p>
       ${rows}
-      <div class="row-actions"><a href="#/lottery">Full lottery →</a></div>
+      <div class="row-actions">
+        <a href="#/lottery">Full lottery →</a>
+        <a href="#/members">Eligible members →</a>
+      </div>
     </div>`;
 }
 
@@ -713,18 +718,122 @@ async function pageAsset(name) {
   if (cid) loadAssetMedia(cid, a.ipfs_gateways);
 }
 
+function hashQuery() {
+  const h = location.hash || "";
+  const i = h.indexOf("?");
+  return new URLSearchParams(i >= 0 ? h.slice(i + 1) : "");
+}
+
+function membersHash(scope, q) {
+  const p = new URLSearchParams();
+  if (scope && scope !== "eligible") p.set("scope", scope);
+  if (q) p.set("q", q);
+  const qs = p.toString();
+  return "#/members" + (qs ? "?" + qs : "");
+}
+
+function memberStatusBadges(m) {
+  if (m.eligible) {
+    return `${m.in_hat ? `<span class="badge lottery">in hat</span>` : ""} ${m.heartbeat ? `<span class="badge ok">heartbeat</span>` : ""}`.trim()
+      || `<span class="badge ok">eligible</span>`;
+  }
+  return `<span class="badge">offline</span>`;
+}
+
 async function pageIdentity(handleName) {
-  const q = await api("/search?q=" + encodeURIComponent("@" + handleName));
-  const ident = (q.results || []).find((r) => r.type === "identity");
-  if (ident && ident.address) {
-    location.hash = "#/address/" + encodeURIComponent(ident.address);
-    return;
+  const p = await api("/handle/" + encodeURIComponent(handleName));
+  const name = p.handle || handleName;
+  app.innerHTML = `
+    <p class="crumb"><a href="${membersHash("all", "")}">Members</a> / @${esc(name)}</p>
+    <h1 class="page-title">@${esc(name)}</h1>
+    <p class="sub">${p.found ? "Lottery identity from coinbase XVA1 (the handle stays; payout addresses change)." : "This handle is not in the indexed hat or live eligible set yet."}</p>
+    <div class="grid stats">
+      <div class="card stat"><span>Now</span><b>${p.eligible ? "eligible" : "offline"}</b></div>
+      <div class="card stat"><span>Wins</span><b>${p.wins || 0}</b></div>
+      <div class="card stat"><span>Earned</span><b>${atomsToXfer(p.earned || 0)}</b></div>
+      <div class="card stat"><span>Hat blocks</span><b>${p.hat_blocks || 0}</b></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Identity</h2>
+      <div class="kv">
+        <b>Handle</b><div>${handle(name)} ${memberStatusBadges(p)}</div>
+        <b>In this minute’s hat</b><div>${yesNo(p.in_hat)}</div>
+        <b>Heartbeat</b><div>${yesNo(p.heartbeat)}</div>
+        <b>Address</b><div>${p.address ? linkAddr(p.address) : `<span class="faint">—</span>`}</div>
+        <b>Asset root</b><div>${p.asset ? linkAsset(p.asset) : `<span class="faint">—</span>`}</div>
+        <b>First hat</b><div>${p.first_hat != null ? linkBlock(p.first_hat) : "—"}</div>
+        <b>Last hat</b><div>${p.last_hat != null ? linkBlock(p.last_hat) : "—"}</div>
+        <b>Last seen</b><div>${p.last_seen ? timeAgo(p.last_seen) : "—"}</div>
+      </div>
+    </div>
+    <div class="grid two" style="margin-top:16px">
+      <div class="card">
+        <h2>Wins</h2>
+        <table>
+          <thead><tr><th>Block</th><th>Paid</th></tr></thead>
+          <tbody>
+            ${(p.wins_recent || []).map((w) => `<tr><td>${linkBlock(w.height)}</td><td>${atomsToXfer(w.amount)}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">No XVA1 wins indexed for this handle.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Recent hat</h2>
+        <table>
+          <thead><tr><th>Block</th><th>n</th></tr></thead>
+          <tbody>
+            ${(p.appearances || []).map((a) => `<tr><td>${linkBlock(a.height)}</td><td>${a.n ?? "—"}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">Not seen in an indexed XVA1 hat.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function pageMembers() {
+  const params = hashQuery();
+  const q = (params.get("q") || "").trim();
+  const scope = params.get("scope") === "all" ? "all" : "eligible";
+  const data = await api(`/lottery/members?q=${encodeURIComponent(q)}&scope=${scope}&limit=400`);
+  const items = data.items || [];
+  app.innerHTML = `
+    <h1 class="page-title">Eligible members</h1>
+    <p class="sub">X Verified <code>@handles</code> in this minute’s hat or with a live heartbeat. Search any handle — including people who were eligible earlier and are offline now.</p>
+    <div class="card">
+      <div class="toolbar">
+        <form class="search" id="member-search">
+          <input id="member-q" type="search" value="${esc(q)}" placeholder="Search @handle" autocomplete="off" />
+          <button type="submit">Search</button>
+        </form>
+        <div class="tabs" id="member-tabs">
+          <button type="button" data-scope="eligible" class="${scope === "eligible" ? "on" : ""}">Eligible now (${data.eligible_total || 0})</button>
+          <button type="button" data-scope="all" class="${scope === "all" ? "on" : ""}">All handles (${data.known_total || 0})</button>
+        </div>
+      </div>
+      <p class="member-meta">${items.length} shown${q ? ` for “${esc(q)}”` : ""} · ${scope === "eligible" ? "live eligible only" : "every indexed handle"}</p>
+      <table class="click-rows">
+        <thead><tr><th>Handle</th><th>Now</th><th>Wins</th><th>Earned</th><th>Last hat</th></tr></thead>
+        <tbody>
+          ${items.map((m) => `<tr data-href="#/identity/${encodeURIComponent(m.handle)}">
+            <td>${handle(m.handle)}</td>
+            <td>${memberStatusBadges(m)}</td>
+            <td>${m.wins || 0}</td>
+            <td>${atomsToXfer(m.earned || 0)}</td>
+            <td>${m.last_hat != null ? linkBlock(m.last_hat) : "—"}</td>
+          </tr>`).join("") || `<tr><td colspan="5" class="empty">${q ? "No handle matches that search." : (scope === "eligible" ? "No eligible members this minute. Try All handles, or wait for the next hat." : "No handles indexed yet.")}</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+  const form = $("#member-search");
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      location.hash = membersHash(scope, $("#member-q").value.trim());
+    });
   }
-  if (ident && ident.asset) {
-    location.hash = "#/asset/" + encodeURIComponent(ident.asset);
-    return;
-  }
-  app.innerHTML = `<h1 class="page-title">@${esc(handleName)}</h1><div class="card empty">No on-chain identity root indexed for this handle yet.</div>`;
+  document.querySelectorAll("#member-tabs button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      location.hash = membersHash(btn.getAttribute("data-scope"), ($("#member-q") && $("#member-q").value.trim()) || q);
+    });
+  });
 }
 
 async function pageLottery() {
@@ -749,6 +858,7 @@ async function pageLottery() {
         <h2>Active now</h2>
         ${liveHint}
         <p class="muted" style="margin-top:12px">Eligible locally: ${live.local_eligible ? "yes" : "no"} · verified: ${live.local_x_verified ? "yes" : "no"} · @${esc(live.local_xaccount || "—")}</p>
+        <div class="row-actions"><a href="#/members">Browse all eligible members →</a></div>
       </div>
     </div>
     <div class="grid two" style="margin-top:16px">
@@ -871,6 +981,7 @@ const routes = [
   [/^#\/assets$/, pageAssets],
   [/^#\/asset\/(.+)$/, (m) => pageAsset(decodeURIComponent(m[1]))],
   [/^#\/identity\/(.+)$/, (m) => pageIdentity(decodeURIComponent(m[1]))],
+  [/^#\/members(?:\?.*)?$/, pageMembers],
   [/^#\/lottery$/, pageLottery],
   [/^#\/rich$/, pageRich],
   [/^#\/mempool$/, pageMempool],
@@ -912,5 +1023,5 @@ setInterval(() => {
 setInterval(() => {
   refreshStatus();
   const h = location.hash || "#/";
-  if (h === "#/" || h === "#/lottery") route();
+  if (h === "#/" || h === "#/lottery" || (h.startsWith("#/members") && document.activeElement?.id !== "member-q")) route();
 }, 8000);

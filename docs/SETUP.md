@@ -1,22 +1,76 @@
 # Setup guide (start here)
 
 This explorer is a **website on your computer**. It does not hold coins. It
-reads a running **X Coin wallet / node** and shows blocks, assets, and
-lottery winners in a browser.
+reads a running **X Coin wallet / node** and shows blocks, assets, lottery
+winners, and eligible `@handles` in a browser.
 
-You will do three things:
-
-1. Install Python (once).
-2. Tell the X Coin wallet to answer local questions (RPC).
-3. Start the explorer.
+You need **X Coin 1.0.13 or newer**. Do not stay on 1.0.12 if you need
+Claim My Asset to confirm.
 
 ---
 
-## What you need
+## One click (recommended)
+
+### Windows
+
+1. Unzip this explorer (or clone the repo).
+2. Double-click **`SETUP.bat`**.
+3. If Windows SmartScreen warns, choose **More info → Run anyway**.
+4. Finish any first-run **12-word** screen in **X Coin Wallet**.
+5. Browse [http://127.0.0.1:8080](http://127.0.0.1:8080).
+
+`SETUP.bat` will try to:
+
+- Install **Python 3.11+** with `winget` if Python is missing (or open
+  [python.org](https://www.python.org/downloads/windows/) if `winget` is not there)
+- Find **X Coin Wallet.exe**, or download official **1.0.13** from
+  [NiftyRaven/x-coin Releases](https://github.com/NiftyRaven/x-coin/releases)
+  into `%LOCALAPPDATA%\XCoin-Wallet\1.0.13`
+- Add only these **template** lines to the wallet config (no passwords):
+
+  ```
+  server=1
+  rpcbind=127.0.0.1
+  rpcallowip=127.0.0.1
+  ```
+
+- Start the wallet if it is not running, then start this explorer
+
+Next time you only need **`start.bat`** (wallet already open).
+
+### Linux (x86_64)
+
+```bash
+chmod +x setup.sh start.sh
+./setup.sh
+```
+
+Same idea: install Python if needed (`apt` / `dnf`), find or download
+the official Linux 1.0.13 tarball into
+`~/.local/share/XCoin-Wallet/1.0.13`, add `server=1` (no passwords),
+start the wallet, then start the explorer.
+
+Next time: `./start.sh`.
+
+### What one-click will never do
+
+- It will **not** write `rpcuser` / `rpcpassword`
+- It will **not** copy `.cookie`, `.pem`, or your 12-word seed
+- It will **not** invent a peer host (the official wallet zip already
+  has `addnode` / `seednode` for the baked seed)
+- It will **not** spend coins
+
+If the wallet is already installed somewhere else, set
+`XCOIN_WALLET` to the full path of `X Coin Wallet.exe` /
+`X Coin Wallet` and run setup again.
+
+---
+
+## What you need (manual path)
 
 | Item | Why |
 | --- | --- |
-| A computer on **Windows** or **Linux** | This is what the wallet supports |
+| **Windows** or **Linux x86_64** | What the wallet supports |
 | **X Coin wallet 1.0.13+** | [github.com/NiftyRaven/x-coin/releases](https://github.com/NiftyRaven/x-coin/releases) |
 | **Python 3.11 or newer** | Runs the explorer |
 | A web browser | Chrome, Firefox, Edge, … |
@@ -26,7 +80,7 @@ seeds into the explorer.
 
 ---
 
-## Step 1 — Install Python
+## Manual Step 1 — Install Python
 
 ### Windows
 
@@ -58,25 +112,26 @@ python3 --version
 
 ---
 
-## Step 2 — Get the explorer files
+## Manual Step 2 — Get the explorer files
 
-### Option A — Git (if you have Git)
+### Option A — Git
 
 ```bat
 git clone https://github.com/NiftyRaven/xcoin-explorer.git
 cd xcoin-explorer
 ```
 
-### Option B — Release zip (easiest, no Git)
+### Option B — Release zip (no Git)
 
 1. Open [xcoin-explorer Releases](https://github.com/NiftyRaven/xcoin-explorer/releases).
-2. Download **XFER-Explorer-1.1.0-Windows.zip** (or the Linux zip).
+2. Download **XFER-Explorer-1.2.0.zip**.
 3. Right-click → **Extract All**.
-4. Open the folder and read **START HERE.txt**.
+4. Open the folder and double-click **SETUP.bat** (Windows) or run
+   `./setup.sh` (Linux).
 
 ---
 
-## Step 3 — Let the wallet talk to the explorer (RPC)
+## Manual Step 3 — Let the wallet talk to the explorer (RPC)
 
 The wallet is a closed box until you turn on **RPC** (a local-only API).
 The explorer uses that. Nothing is opened to the internet.
@@ -159,7 +214,7 @@ If `.cookie` is missing, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ---
 
-## Step 4 — Start the explorer
+## Manual Step 4 — Start the explorer only
 
 ### Windows
 
@@ -191,7 +246,10 @@ The explorer only works while the node is up.
 On the Home page you should see:
 
 - A green pill: **node · mainnet** (or practice/regtest)
-- A height number (0 is normal before the first lottery block)
+- A height number (0 is normal only at genesis; after launch it should climb)
+
+Then try **Members** to browse eligible `@handles`, **Assets** for IPFS,
+and **Lottery** for the minute draw.
 
 If you see a yellow banner about RPC, read
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
@@ -200,7 +258,8 @@ If you see a yellow banner about RPC, read
 
 ## Optional: password instead of cookie
 
-Use this only if cookie login keeps failing.
+Use this only if cookie login keeps failing. Pick your own values.
+Never commit them.
 
 1. Pick a username and a **long random password**. Do not reuse a website password.
 2. In the wallet `xcoin.conf` the 1.0.13 start reads (next to

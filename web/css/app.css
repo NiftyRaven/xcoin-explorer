@@ -135,9 +135,15 @@ tr:hover td { background: rgba(255,255,255,0.015); }
 .io { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 12px; }
 .arrow { display: grid; place-items: center; color: var(--faint); }
 .foot { margin-top: 36px; color: var(--faint); font-size: 12px; }
-.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .tabs button { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 10px; border-radius: 999px; cursor: pointer; }
 .tabs button.on { color: var(--text); border-color: var(--blue); }
+.toolbar {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; margin-bottom: 14px;
+}
+.toolbar .search { min-width: 220px; flex: 1; max-width: 420px; }
+.member-meta { color: var(--muted); font-size: 12px; }
 .notice {
   border: 1px solid #4a3b1e; background: rgba(226, 179, 74, 0.06); color: var(--gold2);
   padding: 12px 14px; border-radius: 12px; margin-bottom: 16px; font-size: 13px;

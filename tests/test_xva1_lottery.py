@@ -145,6 +145,27 @@ def test_xid1_is_not_lottery_identity(tmp_path: Path):
     hist = q.lottery_history(10)
     who = hist[0]["winners"][0]["xaccount"]
     assert who == "humble_miner"
+
+    members = q.lottery_members(scope="all")
+    names = [m["handle"] for m in members["items"]]
+    assert names == ["humble_miner", "lampacenter", "nftrvn"]
+    humble = next(m for m in members["items"] if m["handle"] == "humble_miner")
+    assert humble["wins"] == 1
+    assert humble["hat_blocks"] == 1
+    found = q.lottery_members(q="lampa", scope="all")
+    assert [m["handle"] for m in found["items"]] == ["lampacenter"]
+    offline = q.lottery_members(scope="eligible", hat_handles=[], heartbeat_handles=[])
+    assert offline["items"] == []
+    live = q.lottery_members(scope="eligible", hat_handles=["lampacenter"])
+    assert [m["handle"] for m in live["items"]] == ["lampacenter"]
+    assert live["items"][0]["in_hat"] is True
+    profile = q.handle_profile("humble_miner")
+    assert profile["found"] is True
+    assert profile["wins"] == 1
+    assert profile["wins_recent"][0]["height"] == 139
+    search = q.search("@lampa")
+    ids = [r["id"] for r in search["results"] if r["type"] == "identity"]
+    assert "lampacenter" in ids
     db.close()
 
 

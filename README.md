@@ -10,8 +10,9 @@ IPFS images or video. See who won each minute’s lottery.
 This is **not** a wallet. It cannot spend coins. It only reads a node you
 already run.
 
-**New here?** Open **[START HERE.txt](START HERE.txt)** or
-**[docs/SETUP.md](docs/SETUP.md)**.
+**New here?** Double-click **[SETUP.bat](SETUP.bat)** (Windows) or run
+**[setup.sh](setup.sh)** (Linux). Details:
+**[START HERE.txt](START HERE.txt)** · **[docs/SETUP.md](docs/SETUP.md)**.
 Stuck? **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**.
 
 Use wallet **1.0.13 or newer**. Do not stay on 1.0.12 if you need Claim
@@ -19,26 +20,16 @@ My Asset to confirm.
 
 ---
 
-## Quick start (Windows)
+## One-click start
 
-1. Install [Python 3.11+](https://www.python.org/downloads/) (tick **Add python.exe to PATH**).
-2. Install [X Coin 1.0.13](https://github.com/NiftyRaven/x-coin/releases).
-3. Fully quit the wallet (tray icon → Exit).
-4. Add this line to **both** wallet config files if they exist:
+| | |
+| --- | --- |
+| Windows | Double-click `SETUP.bat` (first time) then `start.bat` |
+| Linux x86_64 | `chmod +x setup.sh start.sh && ./setup.sh` |
 
-   ```
-   server=1
-   ```
-
-   - Next to `X Coin Wallet.exe` (1.0.13 reads this file on double-click)
-   - `%APPDATA%\XCoin\xcoin.conf` (Win+R → `%APPDATA%\XCoin`)
-
-5. Start **X Coin Wallet.exe**. Wait until it loads.
-6. In this folder, double-click `start.bat`.
-7. Browse [http://127.0.0.1:8080](http://127.0.0.1:8080).
-
-Linux: `./start.sh` after the same `server=1` lines next to **X Coin Wallet**
-and in `~/.xcoin/xcoin.conf`.
+The setup script installs Python if needed, finds or downloads official
+X Coin **1.0.13**, adds `server=1` (no passwords), starts the wallet, and
+opens [http://127.0.0.1:8080](http://127.0.0.1:8080).
 
 Templates (no secrets in this repo):
 
@@ -59,6 +50,7 @@ Copy examples locally. Never commit `explorer.toml`.
 | Address | XFER balance, assets, lottery wins |
 | Assets | Identity roots, `NAME/CHILD` subs, `NAME#tag` uniques; click through for holders, activity, and IPFS image/video |
 | Lottery | Live draw, active `@handles`, history, leaderboard |
+| Members | Browse every eligible `@handle`, or search any handle |
 | Holders | Richest XFER addresses |
 | Mempool / Network | Unconfirmed txs and peers |
 

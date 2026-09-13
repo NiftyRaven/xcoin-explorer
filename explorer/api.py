@@ -11,9 +11,56 @@ from fastapi.staticfiles import StaticFiles
 from explorer import __version__
 from explorer.chain import GENESIS_HASH_MAIN, GENESIS_TIME_MAIN, NAME, SLOT_SECONDS, SUBUNIT, TICKER
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
-from explorer.queries import Queries
+from explorer.queries import Queries, norm_handle
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+
+
+def _as_node_list(value) -> list[dict]:
+    if isinstance(value, dict):
+        if any(isinstance(v, dict) for v in value.values()):
+            return [v for v in value.values() if isinstance(v, dict)]
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, dict)]
+    return []
+
+
+def live_lottery_handles(queries: Queries, indexer, rpc) -> tuple[list[str], list[str], dict | None]:
+    """Current hat handles + heartbeating node handles (no secrets)."""
+    live = None
+    extra: list[dict] = []
+    if rpc.connected:
+        live = rpc.try_call("getlotteryinfo", default=None)
+        extra = _as_node_list(rpc.try_call("getactivenodes", default=None))
+    if not extra:
+        extra = _as_node_list(indexer.live_nodes())
+
+    heartbeat: list[str] = []
+    seen_beat: set[str] = set()
+    for node in extra:
+        handle = norm_handle(node.get("xaccount"))
+        if handle and handle not in seen_beat:
+            seen_beat.add(handle)
+            heartbeat.append(handle)
+
+    hat: list[str] = []
+    stamped = live.get("stamped_handles") if isinstance(live, dict) else None
+    if stamped:
+        seen: set[str] = set()
+        for raw in stamped:
+            handle = norm_handle(str(raw))
+            if handle and handle not in seen:
+                seen.add(handle)
+                hat.append(handle)
+    else:
+        seen = set()
+        for row in queries.last_xva():
+            handle = norm_handle(row.get("xaccount"))
+            if handle and handle not in seen:
+                seen.add(handle)
+                hat.append(handle)
+    return hat, heartbeat, live if isinstance(live, dict) else None
 
 
 def create_app(queries: Queries, indexer, rpc) -> FastAPI:
@@ -144,54 +191,61 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
 
     @app.get("/api/lottery")
     def lottery():
-        live = None
         last_xva = queries.last_xva()
+        hat, heartbeat, live = live_lottery_handles(queries, indexer, rpc)
         id_map: dict[str, str] = {}
         for row in last_xva:
             nid = (row.get("node_id") or "").lower()
-            handle = (row.get("xaccount") or "").lower().lstrip("@")
+            handle = norm_handle(row.get("xaccount"))
             if nid and handle:
                 id_map[nid] = handle
-        # getactivenodes is not the seed hat (player nodes often omit themselves).
-        # Use it only as a supplemental id → handle map.
         extra = []
         if rpc.connected:
-            live = rpc.try_call("getlotteryinfo", default=None)
-            extra = rpc.try_call("getactivenodes", default=None) or indexer.live_nodes() or []
+            extra = _as_node_list(rpc.try_call("getactivenodes", default=None))
+        if not extra:
+            extra = _as_node_list(indexer.live_nodes())
         for n in extra:
             nid = (n.get("id") or "").lower()
-            handle = (n.get("xaccount") or "").lower().lstrip("@")
+            handle = norm_handle(n.get("xaccount"))
             if nid and handle:
                 id_map[nid] = handle
-        stamped = None
-        if isinstance(live, dict):
-            stamped = live.get("stamped_handles")
-        if stamped:
-            active_handles = [str(h).lower().lstrip("@") for h in stamped if h]
-        else:
-            active_handles = []
-            seen: set[str] = set()
-            for row in last_xva:
-                h = (row.get("xaccount") or "").lower().lstrip("@")
-                if h and h not in seen:
-                    seen.add(h)
-                    active_handles.append(h)
         winner_handles: list[str] = []
-        if isinstance(live, dict):
+        if live:
             for wid in live.get("winners") or []:
                 h = id_map.get(str(wid).lower())
                 if h:
                     winner_handles.append(h)
-        nodes = [{"xaccount": h} for h in active_handles]
+        nodes = [{"xaccount": h} for h in hat]
         return {
             "live": live,
             "nodes": nodes,
-            "active_handles": active_handles,
+            "active_handles": hat,
+            "heartbeat_handles": heartbeat,
             "winner_handles": winner_handles,
             "rpc_connected": bool(rpc.connected),
             "history": queries.lottery_history(30),
             "leaders": queries.lottery_leaders(40),
         }
+
+    @app.get("/api/lottery/members")
+    def lottery_members(q: str = "", scope: str = "eligible", limit: int = 200, offset: int = 0):
+        hat, heartbeat, _live = live_lottery_handles(queries, indexer, rpc)
+        return queries.lottery_members(
+            q=q,
+            scope=scope,
+            hat_handles=hat,
+            heartbeat_handles=heartbeat,
+            limit=limit,
+            offset=offset,
+        )
+
+    @app.get("/api/handle/{name}")
+    def handle_profile(name: str):
+        hat, heartbeat, _live = live_lottery_handles(queries, indexer, rpc)
+        profile = queries.handle_profile(name, hat, heartbeat)
+        if not profile:
+            return JSONResponse({"error": "invalid handle"}, status_code=400)
+        return profile
 
     @app.get("/api/lottery/winners")
     def lottery_winners(limit: int = 40, before: int | None = None):

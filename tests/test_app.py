@@ -19,7 +19,7 @@ def test_health_and_home(tmp_path: Path):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["coin"] == "XFER"
-    assert r.json()["version"] == "1.1.0"
+    assert r.json()["version"] == "1.2.0"
     status = client.get("/api/status").json()
     assert "indexed_height" in status
     home = client.get("/")
@@ -38,4 +38,17 @@ def test_health_and_home(tmp_path: Path):
     assert "loadAssetMedia" in text
     assert "formatAssetAmount" in text
     assert "pageAsset" in text
+    assert "pageMembers" in text
+    assert "Eligible members" in text
+    members = client.get("/api/lottery/members")
+    assert members.status_code == 200
+    assert "items" in members.json()
+    root = Path(__file__).resolve().parent.parent
+    setup_win = (root / "SETUP.bat").read_text(encoding="utf-8")
+    setup_ps = (root / "scripts" / "setup-windows.ps1").read_text(encoding="utf-8")
+    setup_sh = (root / "setup.sh").read_text(encoding="utf-8")
+    for text in (setup_win, setup_ps, setup_sh):
+        assert "XferExplore" not in text
+        assert "rpcpassword=" not in text.lower() or "YOUR_LONG_RANDOM_PASSWORD" in text
+        assert ".pem" not in text or "never" in text.lower()
     db.close()

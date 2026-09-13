@@ -6,5 +6,7 @@
   port 38442 on your router.
 - `explorer.toml` may contain an RPC password. It is gitignored. Use
   `explorer.toml.example` as the public template.
+- `SETUP.bat` / `setup.sh` only add `server=1` and localhost RPC bind
+  lines. They never write passwords, cookies, seeds, or `.pem` keys.
 - If you file a GitHub issue, do not paste `.cookie`, `xcoin.conf`
   passwords, `debug.log` wallet paths you care about, or 12-word seeds.

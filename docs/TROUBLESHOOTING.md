@@ -3,6 +3,9 @@
 Work top to bottom. After each change, **fully quit** the wallet, start it
 once, then refresh [http://127.0.0.1:8080](http://127.0.0.1:8080).
 
+First-time install: run **`SETUP.bat`** (Windows) or **`./setup.sh`**
+(Linux). That is the one-click path in [SETUP.md](SETUP.md).
+
 ---
 
 ## Yellow banner / “node offline”
