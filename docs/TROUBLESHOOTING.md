@@ -17,9 +17,9 @@ The explorer cannot log in to the wallet.
 Task Manager (Ctrl+Shift+Esc) should show **xcoin-qt** (GUI) **or**
 **xcoind** (no window) — not both.
 
-### 2. Did you set `server=1` in the file 1.0.14 reads?
+### 2. Did you set `server=1` in the file the wallet reads?
 
-X Coin **1.0.14** double-click reads `xcoin.conf` **next to**
+X Coin **1.0.13+** (Light 1.0.14 / Heavy 1.0.15) double-click reads `xcoin.conf` **next to**
 `X Coin Wallet.exe`, not only `%APPDATA%\XCoin\xcoin.conf`.
 
 Open both (if they exist) and add a line that is exactly:
@@ -65,7 +65,7 @@ one wallet.
 
 Follow **Optional: password instead of cookie** in [SETUP.md](SETUP.md).
 Username and password must match in the `xcoin.conf` next to
-**X Coin Wallet.exe** (1.0.14) **and** `explorer.toml`.
+**X Coin Wallet.exe** (1.0.14 Light or 1.0.15 Heavy) **and** `explorer.toml`.
 
 ---
 
