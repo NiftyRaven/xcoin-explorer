@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$FallbackVersion = "1.0.14"
+$FallbackVersion = "1.0.15"
 $FallbackUrl = "https://github.com/NiftyRaven/x-coin/releases/download/v$FallbackVersion/X-Coin-$FallbackVersion-Windows.zip"
 $WalletHome = Join-Path $env:LOCALAPPDATA "XCoin-Wallet"
 
@@ -73,19 +73,30 @@ function Ensure-ConfLine([string]$path, [string]$key, [string]$value) {
 }
 
 function Get-LatestWalletRelease {
+    # GitHub "latest" can stay on Light 1.0.14 while Heavy 1.0.15 is newer.
+    # Pick the highest version tag that actually has a wallet zip.
     try {
         $headers = @{ "User-Agent" = "XFER-Explorer-setup" }
-        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/NiftyRaven/x-coin/releases/latest" -Headers $headers
-        $asset = @($rel.assets) | Where-Object { $_.name -match '^X-Coin-.+-Windows\.zip$' } | Select-Object -First 1
-        if ($asset -and $asset.browser_download_url) {
-            $ver = [string]$rel.tag_name
-            if ($ver.StartsWith("v")) { $ver = $ver.Substring(1) }
-            Write-Host "Latest official wallet on GitHub: $ver"
-            return @{ Version = $ver; Url = [string]$asset.browser_download_url }
+        $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/NiftyRaven/x-coin/releases?per_page=20" -Headers $headers
+        $bestVer = $null
+        $bestUrl = $null
+        foreach ($rel in @($rels)) {
+            if ($rel.draft -or $rel.prerelease) { continue }
+            $asset = @($rel.assets) | Where-Object { $_.name -match '^X-Coin-.+-Windows\.zip$' } | Select-Object -First 1
+            if (-not $asset -or -not $asset.browser_download_url) { continue }
+            $ver = ([string]$rel.tag_name).TrimStart("v")
+            try { $parsed = [version]$ver } catch { continue }
+            if (-not $bestVer -or $parsed -gt $bestVer) {
+                $bestVer = $parsed
+                $bestUrl = [string]$asset.browser_download_url
+            }
         }
-    } catch {
-        Write-Host "Could not query GitHub Releases; using $FallbackVersion."
-    }
+        if ($bestUrl) {
+            Write-Host "Newest official wallet zip: $bestVer"
+            return @{ Version = $bestVer.ToString(); Url = $bestUrl }
+        }
+    } catch { }
+    Write-Host "Could not query GitHub Releases; using $FallbackVersion."
     return @{ Version = $FallbackVersion; Url = $FallbackUrl }
 }
 

@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FALLBACK_VERSION="1.0.14"
+FALLBACK_VERSION="1.0.15"
 FALLBACK_URL="https://github.com/NiftyRaven/x-coin/releases/download/v${FALLBACK_VERSION}/X-Coin-${FALLBACK_VERSION}-Linux-x86_64.tar.gz"
 WALLET_HOME="${XCOIN_WALLET_HOME:-$HOME/.local/share/XCoin-Wallet}"
 WALLET_VERSION="$FALLBACK_VERSION"
@@ -56,30 +56,44 @@ EOF
 resolve_latest_wallet() {
   local json pair ver url
   json="$(curl -fsSL -H 'User-Agent: XFER-Explorer-setup' \
-    https://api.github.com/repos/NiftyRaven/x-coin/releases/latest 2>/dev/null || true)"
+    'https://api.github.com/repos/NiftyRaven/x-coin/releases?per_page=20' 2>/dev/null || true)"
   if [[ -z "$json" ]] && command -v wget >/dev/null 2>&1; then
     json="$(wget -qO- --header='User-Agent: XFER-Explorer-setup' \
-      https://api.github.com/repos/NiftyRaven/x-coin/releases/latest 2>/dev/null || true)"
+      'https://api.github.com/repos/NiftyRaven/x-coin/releases?per_page=20' 2>/dev/null || true)"
   fi
   pair="$(printf '%s' "$json" | python3 -c '
 import json, sys
 try:
-    rel = json.load(sys.stdin)
+    rels = json.load(sys.stdin)
 except Exception:
     raise SystemExit(0)
-for a in rel.get("assets") or []:
-    name = a.get("name") or ""
-    if name.startswith("X-Coin-") and name.endswith("-Linux-x86_64.tar.gz"):
-        tag = (rel.get("tag_name") or "").lstrip("v")
-        print(tag + " " + (a.get("browser_download_url") or ""))
-        break
+if not isinstance(rels, list):
+    rels = [rels]
+best = None
+for rel in rels:
+    if rel.get("draft") or rel.get("prerelease"):
+        continue
+    tag = (rel.get("tag_name") or "").lstrip("v")
+    try:
+        key = tuple(int(p) for p in tag.split("."))
+    except ValueError:
+        continue
+    for a in rel.get("assets") or []:
+        name = a.get("name") or ""
+        if name.startswith("X-Coin-") and name.endswith("-Linux-x86_64.tar.gz"):
+            url = a.get("browser_download_url") or ""
+            if url and (best is None or key > best[0]):
+                best = (key, tag, url)
+            break
+if best:
+    print(best[1] + " " + best[2])
 ' 2>/dev/null || true)"
   ver="${pair%% *}"
   url="${pair#* }"
   if [[ -n "$ver" && -n "$url" && "$url" == https://* ]]; then
     WALLET_VERSION="$ver"
     WALLET_URL="$url"
-    echo "Latest official wallet on GitHub: ${WALLET_VERSION}"
+    echo "Newest official wallet tarball: ${WALLET_VERSION}"
     return 0
   fi
   WALLET_VERSION="$FALLBACK_VERSION"

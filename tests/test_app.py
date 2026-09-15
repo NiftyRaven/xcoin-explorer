@@ -19,7 +19,7 @@ def test_health_and_home(tmp_path: Path):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["coin"] == "XFER"
-    assert r.json()["version"] == "1.3.0"
+    assert r.json()["version"] == "1.3.1"
     status = client.get("/api/status").json()
     assert "indexed_height" in status
     home = client.get("/")
@@ -66,7 +66,8 @@ def test_health_and_home(tmp_path: Path):
     for blob in (setup_ps, setup_sh):
         assert "NiftyRaven/x-coin" in blob
         assert "server=1" in blob
-        assert "releases/latest" in blob
+        assert "releases?per_page=" in blob
         assert "Found installed wallet" in blob
         assert "No wallet found" in blob
+        assert "1.0.15" in blob
     db.close()

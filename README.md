@@ -1,7 +1,7 @@
 # XFER Explorer
 
 A **local** block explorer, asset explorer, and lottery browser for
-[X Coin (XFER) 1.0.14+](https://github.com/NiftyRaven/x-coin).
+[X Coin (XFER) 1.0.14 Light / 1.0.15 Heavy](https://github.com/NiftyRaven/x-coin).
 
 One website on your machine. Search a height, transaction, `X…` address,
 asset name, or `@handle`. Click an asset to see holders, activity, and
@@ -15,8 +15,9 @@ already run.
 **[START HERE.txt](START HERE.txt)** · **[docs/SETUP.md](docs/SETUP.md)**.
 Stuck? **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**.
 
-Use wallet **1.0.14 or newer**. 1.0.13 still follows this chain.
-Do not stay on 1.0.12 if you need Claim My Asset to confirm.
+Use wallet **1.0.14 Light or 1.0.15 Heavy**. Same chain, same lottery.
+1.0.13 still follows this chain. Do not stay on 1.0.12 if you need Claim
+My Asset to confirm.
 
 ---
 
@@ -28,9 +29,10 @@ Do not stay on 1.0.12 if you need Claim My Asset to confirm.
 | Linux x86_64 | `chmod +x setup.sh start.sh && ./setup.sh` |
 
 The setup script installs Python if needed, uses **X Coin Wallet if it
-is already installed**, otherwise downloads the **latest official** zip
-from [NiftyRaven/x-coin Releases](https://github.com/NiftyRaven/x-coin/releases)
-(1.0.14 today), adds `server=1` (no passwords), starts the wallet, and
+is already installed**, otherwise downloads the **newest official** zip
+by version tag from [NiftyRaven/x-coin Releases](https://github.com/NiftyRaven/x-coin/releases)
+(1.0.15 Heavy today; GitHub’s “latest” flag can stay on Light 1.0.14),
+adds `server=1` (no passwords), starts the wallet, and
 opens [http://127.0.0.1:8080](http://127.0.0.1:8080).
 
 Templates (no secrets in this repo):
@@ -73,7 +75,7 @@ data directory.
 
 Default login is the wallet **cookie** (`%APPDATA%\XCoin\.cookie`). If
 that fails, set matching `rpcuser` / `rpcpassword` in the wallet config
-the 1.0.14 start actually reads **and** in a local `explorer.toml`
+the wallet start actually reads **and** in a local `explorer.toml`
 (see SETUP). Never put those values in git.
 
 ---
@@ -81,7 +83,7 @@ the 1.0.14 start actually reads **and** in a local `explorer.toml`
 ## Requirements
 
 - Python 3.11+
-- [X Coin wallet 1.0.14+](https://github.com/NiftyRaven/x-coin/releases) with `server=1`
+- [X Coin wallet 1.0.14 Light / 1.0.15 Heavy](https://github.com/NiftyRaven/x-coin/releases) with `server=1`
 - Ports: node RPC **38442**, explorer **8080** (localhost)
 
 ```bat
