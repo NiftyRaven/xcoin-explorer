@@ -153,6 +153,33 @@ CREATE TABLE IF NOT EXISTS node_seen (
     last_height INTEGER,
     last_seen INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS lottery_shares (
+    txid TEXT PRIMARY KEY,
+    height INTEGER,
+    host_txid TEXT,
+    host_height INTEGER,
+    host_handle TEXT,
+    host_address TEXT,
+    win_amount INTEGER,
+    pot_amount INTEGER,
+    guest_percent INTEGER,
+    guest_count INTEGER,
+    guest_each INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_shares_host ON lottery_shares(host_handle);
+CREATE INDEX IF NOT EXISTS idx_shares_height ON lottery_shares(height DESC);
+
+CREATE TABLE IF NOT EXISTS lottery_share_guests (
+    txid TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    address TEXT,
+    handle TEXT,
+    amount INTEGER,
+    PRIMARY KEY (txid, n)
+);
+CREATE INDEX IF NOT EXISTS idx_share_guest_handle ON lottery_share_guests(handle);
+CREATE INDEX IF NOT EXISTS idx_share_guest_addr ON lottery_share_guests(address);
 """
 
 

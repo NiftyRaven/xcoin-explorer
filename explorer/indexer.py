@@ -21,10 +21,13 @@ from explorer.decode import (
     seed_for_draw,
     select_winners,
 )
+from explorer.hostshare import detect_host_share
 from explorer.rpc import RpcError, XCoinRPC
 
 # Bump to force a full XVA1 rebuild of lottery_wins / lottery_active.
 LOTTERY_INDEX_V = "4"
+# Bump to re-scan indexed spends for 1.0.14 host/guest share-outs.
+SHARE_INDEX_V = "1"
 
 
 def _atoms(value: Any) -> int:
@@ -101,6 +104,7 @@ class Indexer:
         self.db.commit()
 
         self._rebuild_lottery_from_xva()
+        self._rebuild_shares()
         self._refresh_lottery_live()
 
         indexed = self.db.indexed_height()
@@ -160,6 +164,146 @@ class Indexer:
             self._write_lottery_from_coinbase(cb, height, network)
         self.db.set_meta("lottery_v", LOTTERY_INDEX_V)
         self.db.commit()
+
+    def _rebuild_shares(self) -> None:
+        """Tag already-indexed spends that match 1.0.14 guest-split math."""
+        if self.db.get_meta("share_v") == SHARE_INDEX_V:
+            return
+        self.db.conn.execute("DELETE FROM lottery_share_guests")
+        self.db.conn.execute("DELETE FROM lottery_shares")
+        txids = [
+            r["txid"]
+            for r in self.db.conn.execute(
+                "SELECT txid FROM txs WHERE coinbase=0 AND height>=1"
+            ).fetchall()
+        ]
+        for txid in txids:
+            self._maybe_index_share(txid)
+        self.db.set_meta("share_v", SHARE_INDEX_V)
+        self.db.commit()
+
+    def _handle_for_address(self, addr: str | None) -> str | None:
+        if not addr:
+            return None
+        row = self.db.conn.execute(
+            "SELECT handle FROM identities WHERE address=?", (addr,)
+        ).fetchone()
+        if row and row["handle"]:
+            return str(row["handle"]).lower().lstrip("@")
+        row = self.db.conn.execute(
+            """
+            SELECT xaccount FROM lottery_wins
+            WHERE address=? AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+            LIMIT 1
+            """,
+            (addr,),
+        ).fetchone()
+        if row and row["xaccount"]:
+            return str(row["xaccount"]).lower().lstrip("@")
+        return None
+
+    def _maybe_index_share(self, txid: str) -> None:
+        self.db.conn.execute("DELETE FROM lottery_share_guests WHERE txid=?", (txid,))
+        self.db.conn.execute("DELETE FROM lottery_shares WHERE txid=?", (txid,))
+        row = self.db.conn.execute(
+            "SELECT coinbase, height FROM txs WHERE txid=?", (txid,)
+        ).fetchone()
+        if not row or row["coinbase"]:
+            return
+        vins = self.db.conn.execute(
+            """
+            SELECT spent_txid, spent_n, address, value
+            FROM txio WHERE txid=? AND direction='in'
+            """,
+            (txid,),
+        ).fetchall()
+        win = None
+        for vin in vins:
+            spent = vin["spent_txid"]
+            if not spent:
+                continue
+            cb = self.db.conn.execute(
+                "SELECT height, coinbase FROM txs WHERE txid=?", (spent,)
+            ).fetchone()
+            if not cb or not cb["coinbase"] or int(cb["height"] or 0) < 1:
+                continue
+            spent_amt = int(vin["value"] or 0)
+            if spent_amt <= 0:
+                continue
+            w = self.db.conn.execute(
+                """
+                SELECT height, xaccount, address, amount FROM lottery_wins
+                WHERE height=? AND (address=? OR amount=?)
+                ORDER BY CASE WHEN address=? THEN 0 ELSE 1 END, rank
+                """,
+                (cb["height"], vin["address"], spent_amt, vin["address"]),
+            ).fetchone()
+            if not w:
+                w = self.db.conn.execute(
+                    """
+                    SELECT height, xaccount, address, amount FROM lottery_wins
+                    WHERE height=? ORDER BY rank
+                    """,
+                    (cb["height"],),
+                ).fetchone()
+            if not w:
+                continue
+            win = {
+                "host_txid": spent,
+                "host_height": int(cb["height"]),
+                "host_handle": (str(w["xaccount"]).lower().lstrip("@") if w["xaccount"] else None),
+                "host_address": vin["address"] or w["address"],
+                "win_amount": spent_amt,
+            }
+            break
+        if not win:
+            return
+        outs = [
+            (r["address"], int(r["value"] or 0))
+            for r in self.db.conn.execute(
+                "SELECT address, value FROM txio WHERE txid=? AND direction='out' ORDER BY n",
+                (txid,),
+            ).fetchall()
+        ]
+        found = detect_host_share(win["win_amount"], win["host_address"], outs)
+        if not found:
+            return
+        self.db.conn.execute(
+            """
+            INSERT OR REPLACE INTO lottery_shares(
+                txid, height, host_txid, host_height, host_handle, host_address,
+                win_amount, pot_amount, guest_percent, guest_count, guest_each)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                txid,
+                row["height"],
+                win["host_txid"],
+                win["host_height"],
+                win["host_handle"],
+                win["host_address"],
+                win["win_amount"],
+                found["pot"],
+                found["percent"],
+                len(found["guests"]),
+                found["guest_each"],
+            ),
+        )
+        for i, guest in enumerate(found["guests"]):
+            addr = guest.get("address")
+            self.db.conn.execute(
+                """
+                INSERT OR REPLACE INTO lottery_share_guests(txid, n, address, handle, amount)
+                VALUES(?,?,?,?,?)
+                """,
+                (
+                    txid,
+                    i,
+                    addr,
+                    self._handle_for_address(addr),
+                    guest.get("amount") or 0,
+                ),
+            )
 
     def _upsert_lottery_active(
         self, height: int, node_id: str | None, handle: str | None, n: int = 0
@@ -226,6 +370,14 @@ class Indexer:
         """Drop blocks above `height` (keep height). height=-1 wipes chain index."""
         self.db.conn.execute("DELETE FROM lottery_wins WHERE height>?", (height,))
         self.db.conn.execute("DELETE FROM lottery_active WHERE height>?", (height,))
+        self.db.conn.execute(
+            """
+            DELETE FROM lottery_share_guests
+            WHERE txid IN (SELECT txid FROM lottery_shares WHERE height>?)
+            """,
+            (height,),
+        )
+        self.db.conn.execute("DELETE FROM lottery_shares WHERE height>?", (height,))
         self.db.conn.execute("DELETE FROM asset_activity WHERE height>?", (height,))
         txids = [
             r["txid"]
@@ -641,6 +793,9 @@ class Indexer:
                 self.db.conn.execute(
                     "UPDATE assets SET x_handle=? WHERE name=?", (xid_handle, asset_name)
                 )
+
+        if not coinbase:
+            self._maybe_index_share(txid)
 
     def _note_asset(self, asset: dict, height: int, txid: str, address: str | None, xid_handle: str | None) -> None:
         name = asset.get("name")

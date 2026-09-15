@@ -4,6 +4,8 @@ from explorer.chain import (
     INITIAL_SUBSIDY,
     circulating_supply,
     classify_asset_name,
+    last_paying_height,
+    lifetime_supply,
     slot_from_height,
     subsidy_at,
     winner_count,
@@ -29,6 +31,16 @@ def test_circulating_supply():
     first_era = 2_099_999 * INITIAL_SUBSIDY
     assert circulating_supply(2_099_999) == first_era
     assert circulating_supply(2_100_000) == first_era + INITIAL_SUBSIDY // 2
+
+
+def test_lifetime_clock():
+    last = last_paying_height()
+    assert last == 81_899_999
+    assert subsidy_at(last) > 0
+    assert subsidy_at(last + 1) == 0
+    life = lifetime_supply()
+    assert life > 20_000_000_000 * COIN
+    assert life < 21_000_000_000 * COIN
 
 
 def test_slot_mapping():

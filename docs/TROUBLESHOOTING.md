@@ -17,9 +17,9 @@ The explorer cannot log in to the wallet.
 Task Manager (Ctrl+Shift+Esc) should show **xcoin-qt** (GUI) **or**
 **xcoind** (no window) — not both.
 
-### 2. Did you set `server=1` in the file 1.0.13 reads?
+### 2. Did you set `server=1` in the file 1.0.14 reads?
 
-X Coin **1.0.13** double-click reads `xcoin.conf` **next to**
+X Coin **1.0.14** double-click reads `xcoin.conf` **next to**
 `X Coin Wallet.exe`, not only `%APPDATA%\XCoin\xcoin.conf`.
 
 Open both (if they exist) and add a line that is exactly:
@@ -65,7 +65,7 @@ one wallet.
 
 Follow **Optional: password instead of cookie** in [SETUP.md](SETUP.md).
 Username and password must match in the `xcoin.conf` next to
-**X Coin Wallet.exe** (1.0.13) **and** `explorer.toml`.
+**X Coin Wallet.exe** (1.0.14) **and** `explorer.toml`.
 
 ---
 
@@ -121,6 +121,10 @@ itself.
 Historical winners come from each block’s coinbase `XVA1` (handle + id +
 stamp). The winner is who got paid. Payout addresses change; `@handle`
 does not. `XID1` is the asset-root claim, not lottery identity.
+
+**Guest shares** (wallet 1.0.14) are later sends of a percent of a mature
+lottery output. They are not a second lottery. Guests never enter the hat.
+The explorer tags a share only when the amounts match that wallet math.
 
 ---
 

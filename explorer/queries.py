@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from explorer.chain import BURN_ADDRESSES_MAIN, circulating_supply, halving_interval_for_network, subsidy_at, winner_count
+from explorer.chain import (
+    BURN_ADDRESSES_MAIN,
+    GENESIS_TIME_MAIN,
+    circulating_supply,
+    halving_interval_for_network,
+    last_paying_height,
+    lifetime_supply,
+    minutes_per_year,
+    subsidy_at,
+    winner_count,
+)
 from explorer.db import Database
 from explorer.decode import classify_search
 from explorer.ipfs import attach_ipfs_fields
@@ -197,7 +207,49 @@ class Queries:
                     tx["winner_handle"] = (wins[0].get("xaccount") or None)
                     if tx["winner_handle"]:
                         tx["winner_handle"] = str(tx["winner_handle"]).lower().lstrip("@")
+        share = self._share_for_txid(tx["txid"])
+        if share:
+            tx["host_share"] = share
         return tx
+
+    def _share_for_txid(self, txid: str) -> dict | None:
+        row = self.db.conn.execute(
+            "SELECT * FROM lottery_shares WHERE txid=?", (txid,)
+        ).fetchone()
+        if not row:
+            return None
+        share = row_to_dict(row)
+        share["guests"] = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                "SELECT * FROM lottery_share_guests WHERE txid=? ORDER BY n",
+                (txid,),
+            ).fetchall()
+        ]
+        return share
+
+    def recent_shares(self, limit: int = 20) -> list[dict]:
+        limit = paginate(limit, 20)
+        rows = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT * FROM lottery_shares
+                ORDER BY height DESC, txid
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        for share in rows:
+            share["guests"] = [
+                row_to_dict(r)
+                for r in self.db.conn.execute(
+                    "SELECT * FROM lottery_share_guests WHERE txid=? ORDER BY n",
+                    (share["txid"],),
+                ).fetchall()
+            ]
+        return rows
 
     def address(self, addr: str, limit: int = 50) -> dict:
         limit = paginate(limit, 50)
@@ -257,6 +309,19 @@ class Queries:
             "assets": assets,
             "txs": txs,
             "lottery_wins": wins,
+            "guest_shares": [
+                row_to_dict(r)
+                for r in self.db.conn.execute(
+                    """
+                    SELECT s.txid, s.height, s.host_handle, s.guest_percent, g.amount
+                    FROM lottery_share_guests g
+                    JOIN lottery_shares s ON s.txid = g.txid
+                    WHERE g.address=?
+                    ORDER BY s.height DESC LIMIT 20
+                    """,
+                    (addr,),
+                ).fetchall()
+            ],
             "identity": row_to_dict(ident) if ident else None,
         }
 
@@ -581,6 +646,30 @@ class Queries:
                 (name,),
             ).fetchall()
         ]
+        shares_sent = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT * FROM lottery_shares
+                WHERE lower(host_handle)=?
+                ORDER BY height DESC LIMIT 20
+                """,
+                (name,),
+            ).fetchall()
+        ]
+        shares_received = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT s.txid, s.height, s.host_handle, s.guest_percent, g.amount, g.address
+                FROM lottery_share_guests g
+                JOIN lottery_shares s ON s.txid = g.txid
+                WHERE lower(g.handle)=?
+                ORDER BY s.height DESC LIMIT 20
+                """,
+                (name,),
+            ).fetchall()
+        ]
         return {
             **member,
             "found": bool(
@@ -590,10 +679,171 @@ class Queries:
                 or member.get("eligible")
                 or ident
                 or appearances
+                or shares_sent
+                or shares_received
             ),
             "identity": row_to_dict(ident) if ident else None,
             "wins_recent": wins,
             "appearances": appearances,
+            "shares_sent": shares_sent,
+            "shares_received": shares_received,
+        }
+
+    def chain_stats(self, pulse: int = 180) -> dict:
+        """Observatory aggregates: emission, hat fairness, pulse, identity."""
+        try:
+            pulse = max(24, min(int(pulse or 180), 720))
+        except (TypeError, ValueError):
+            pulse = 180
+        net = self.network()
+        interval = halving_interval_for_network(net)
+        height = max(int(self.db.indexed_height() or 0), 0)
+        genesis_time = int(self.db.get_meta("genesis_time") or GENESIS_TIME_MAIN)
+        last_pay = last_paying_height(interval)
+        issued = circulating_supply(height, interval)
+        lifetime = lifetime_supply(interval)
+        era = height // interval if interval else 0
+        era_end = (era + 1) * interval - 1
+        next_halving = era_end + 1 if subsidy_at(height, interval) else None
+        mpy = minutes_per_year()
+
+        hat_sizes = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT height, COUNT(*) AS n
+                FROM lottery_active
+                WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+                GROUP BY height
+                ORDER BY height DESC
+                LIMIT ?
+                """,
+                (pulse,),
+            ).fetchall()
+        ]
+        hat_sizes.reverse()
+
+        handles = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT
+                    lower(a.xaccount) AS handle,
+                    COUNT(*) AS hat_blocks,
+                    MIN(a.height) AS first_hat,
+                    MAX(a.height) AS last_hat,
+                    SUM(1.0 / h.n) AS expected_wins
+                FROM lottery_active a
+                JOIN (
+                    SELECT height, COUNT(*) AS n
+                    FROM lottery_active
+                    WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+                    GROUP BY height
+                ) h ON h.height = a.height
+                WHERE a.height>=1 AND a.xaccount IS NOT NULL AND TRIM(a.xaccount)!=''
+                GROUP BY lower(a.xaccount)
+                """
+            ).fetchall()
+        ]
+        wins = {
+            (r["handle"] or "").lower(): (int(r["wins"] or 0), int(r["earned"] or 0))
+            for r in self.db.conn.execute(
+                """
+                SELECT lower(xaccount) AS handle, COUNT(*) AS wins, SUM(amount) AS earned
+                FROM lottery_wins
+                WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+                GROUP BY lower(xaccount)
+                """
+            ).fetchall()
+        }
+        for row in handles:
+            w, earned = wins.get(row["handle"], (0, 0))
+            row["wins"] = w
+            row["earned"] = earned
+            exp = float(row.get("expected_wins") or 0)
+            row["expected_wins"] = round(exp, 4)
+            row["luck"] = round(w / exp, 4) if exp > 0 else None
+        handles.sort(key=lambda x: (-(x.get("wins") or 0), x["handle"]))
+
+        kinds = [
+            row_to_dict(r)
+            for r in self.db.conn.execute(
+                """
+                SELECT kind, COUNT(*) AS n
+                FROM assets
+                WHERE kind IS NULL OR kind != 'owner'
+                GROUP BY kind
+                ORDER BY n DESC
+                """
+            ).fetchall()
+        ]
+        ipfs_n = self.db.conn.execute(
+            "SELECT COUNT(*) AS c FROM assets WHERE ipfs IS NOT NULL AND TRIM(ipfs)!=''"
+        ).fetchone()["c"]
+        unique_winners = self.db.conn.execute(
+            """
+            SELECT COUNT(DISTINCT lower(xaccount)) AS c FROM lottery_wins
+            WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+            """
+        ).fetchone()["c"]
+        paydays = self.db.conn.execute(
+            """
+            SELECT COUNT(*) AS c FROM lottery_wins
+            WHERE height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+            """
+        ).fetchone()["c"]
+        top_share = 0.0
+        if paydays and handles:
+            top_share = (handles[0].get("wins") or 0) / paydays
+        hhi = 0.0
+        if paydays:
+            hhi = sum(((h.get("wins") or 0) / paydays) ** 2 for h in handles)
+
+        eras = []
+        for i in range(8):
+            start = 1 if i == 0 else i * interval
+            end = (i + 1) * interval - 1
+            sub = subsidy_at(start, interval)
+            if sub <= 0:
+                break
+            eras.append(
+                {
+                    "era": i,
+                    "start": start,
+                    "end": end,
+                    "subsidy_atoms": sub,
+                    "winners": winner_count(start, interval),
+                    "current": start <= height <= end,
+                }
+            )
+
+        return {
+            "height": height,
+            "genesis_time": genesis_time,
+            "minutes_lived": max(height, 0),
+            "minutes_this_era": (
+                max(0, height - (1 if era == 0 else era * interval) + 1) if height >= 1 else 0
+            ),
+            "era": era,
+            "era_end": era_end,
+            "next_halving_height": next_halving,
+            "minutes_to_halving": max(0, (next_halving or 0) - height) if next_halving else 0,
+            "years_to_halving": round(max(0, (next_halving or 0) - height) / mpy, 2) if next_halving else 0,
+            "last_paying_height": last_pay,
+            "years_of_emission": round(last_pay / mpy, 1),
+            "emission_progress": (height / last_pay) if last_pay else 0,
+            "issued_atoms": issued,
+            "lifetime_atoms": lifetime,
+            "subsidy_atoms": subsidy_at(max(height, 1), interval),
+            "winner_count_now": winner_count(max(height, 1), interval),
+            "paydays": int(paydays or 0),
+            "unique_winners": int(unique_winners or 0),
+            "top_handle_share": round(top_share, 4),
+            "hhi": round(hhi, 4),
+            "handles": handles,
+            "hat_pulse": hat_sizes,
+            "eras": eras,
+            "assets": {"by_kind": kinds, "ipfs": int(ipfs_n or 0)},
         }
 
     def last_xva(self) -> list[dict]:

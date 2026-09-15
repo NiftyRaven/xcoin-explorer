@@ -23,6 +23,8 @@ SKIP_FILE_NAMES = {
     ".env",
     ".cookie",
     "start-wallet-for-explorer.bat",
+    "xattestor.key",
+    "host-guests.json",
 }
 SKIP_SUFFIXES = {".db", ".db-wal", ".db-shm", ".pem", ".key", ".log", ".zip"}
 

@@ -163,6 +163,7 @@ function setNav() {
         : hash.startsWith(href)
           || (href === "#/assets" && hash.startsWith("#/asset/"))
           || (href === "#/members" && hash.startsWith("#/identity/"))
+          || (href === "#/stats" && hash.startsWith("#/stats"))
     );
   });
 }
@@ -301,6 +302,10 @@ function txIdentityHtml(t) {
     }
     return `<span class="faint">no XVA1</span>`;
   }
+  if (t.host_share) {
+    const host = t.host_share.host_handle ? handle(t.host_share.host_handle) : "";
+    return `${host} <span class="badge guest">guest share</span>`.trim();
+  }
   return t.xid_handle ? handle(t.xid_handle) : "—";
 }
 
@@ -331,10 +336,133 @@ function lotteryCard(live, nodes, winnerHandles) {
 }
 
 function tickCountdown() {
-  const el = $("#cd");
-  if (!el) return;
   const rem = 60 - (Math.floor(Date.now() / 1000) % 60);
-  el.textContent = `0:${String(rem).padStart(2, "0")}`;
+  const el = $("#cd");
+  if (el) el.textContent = `0:${String(rem).padStart(2, "0")}`;
+  const sec = $("#obs-sec");
+  if (sec) sec.textContent = String(rem).padStart(2, "0");
+  const arc = $("#obs-sec-arc");
+  if (arc) {
+    const c = 2 * Math.PI * 52;
+    const spent = 60 - rem;
+    arc.setAttribute("stroke-dasharray", `${(spent / 60) * c} ${c}`);
+  }
+}
+
+function handleHue(h) {
+  let n = 0;
+  for (const c of String(h || "")) n = (n * 33 + c.charCodeAt(0)) >>> 0;
+  const hues = [38, 214, 152, 280, 18, 190, 330];
+  return hues[n % hues.length];
+}
+
+function ringClock(progress, remLabel) {
+  const rLife = 70;
+  const rMin = 52;
+  const cLife = 2 * Math.PI * rLife;
+  const cMin = 2 * Math.PI * rMin;
+  const life = Math.max(0, Math.min(1, Number(progress) || 0));
+  return `<div class="obs-clock">
+    <svg viewBox="0 0 180 180" aria-hidden="true">
+      <circle cx="90" cy="90" r="${rLife}" fill="none" stroke="#1c2333" stroke-width="10"/>
+      <circle cx="90" cy="90" r="${rMin}" fill="none" stroke="#161b27" stroke-width="8"/>
+      <circle cx="90" cy="90" r="${rLife}" fill="none" stroke="#e2b34a" stroke-width="10"
+        stroke-linecap="round" transform="rotate(-90 90 90)"
+        stroke-dasharray="${life * cLife} ${cLife}"/>
+      <circle id="obs-sec-arc" cx="90" cy="90" r="${rMin}" fill="none" stroke="#4c8dff" stroke-width="8"
+        stroke-linecap="round" transform="rotate(-90 90 90)"
+        stroke-dasharray="0 ${cMin}"/>
+    </svg>
+    <div class="obs-clock-label">
+      <b id="obs-sec">${esc(remLabel)}</b>
+      <span>this minute</span>
+      <span>${(life * 100).toFixed(4)}% of all emission</span>
+    </div>
+  </div>`;
+}
+
+function eraStairs(eras, height) {
+  if (!eras || !eras.length) return `<div class="empty">Emission eras appear after genesis.</div>`;
+  const maxSub = Math.max(...eras.map((e) => e.subsidy_atoms || 0), 1);
+  return `<div class="era-track">${eras.map((e) => {
+    const h = Math.max(8, Math.round((e.subsidy_atoms / maxSub) * 100));
+    const on = height >= e.start && height <= e.end;
+    return `<div class="era-col${on ? " on" : ""}" style="height:${h}%" title="Era ${e.era}: ${e.start}–${e.end}">
+      <span>${e.era === 0 ? "now" : "½"}</span>
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function hatConstellation(handles) {
+  const rows = (handles || []).slice(0, 16);
+  if (!rows.length) return `<div class="empty">No XVA1 handles indexed yet.</div>`;
+  const size = 360;
+  const cx = 180;
+  const cy = 180;
+  const maxW = Math.max(...rows.map((h) => h.wins || 0), 1);
+  const nodes = rows.map((h, i) => {
+    const ang = (i / rows.length) * Math.PI * 2 - Math.PI / 2;
+    const rad = 56 + ((h.wins || 0) / maxW) * 88;
+    return {
+      ...h,
+      x: cx + Math.cos(ang) * rad,
+      y: cy + Math.sin(ang) * rad,
+      r: 7 + ((h.wins || 0) / maxW) * 10,
+      hue: handleHue(h.handle),
+    };
+  });
+  const lines = nodes.map((n) => `<line x1="${cx}" y1="${cy}" x2="${n.x}" y2="${n.y}" stroke="hsla(${n.hue},70%,58%,0.28)" stroke-width="1.2"/>`).join("");
+  const dots = nodes.map((n) => `<a href="#/identity/${encodeURIComponent(n.handle)}">
+    <circle cx="${n.x}" cy="${n.y}" r="${n.r}" fill="hsl(${n.hue} 70% 58%)" />
+    <text x="${n.x}" y="${n.y + n.r + 12}" text-anchor="middle" fill="#8d97ab" font-size="10">@${esc(n.handle)}</text>
+  </a>`).join("");
+  return `<svg class="hat-map" viewBox="0 0 ${size} ${size}">
+    <circle cx="${cx}" cy="${cy}" r="22" fill="#11151f" stroke="#e2b34a" stroke-width="1.4"/>
+    <text x="${cx}" y="${cy + 4}" text-anchor="middle" fill="#f0d48a" font-size="11">hat</text>
+    ${lines}${dots}
+  </svg>`;
+}
+
+function pulseChart(points) {
+  const rows = points || [];
+  if (rows.length < 2) return `<div class="empty">Hat size pulse appears after a few lottery blocks.</div>`;
+  const w = 640;
+  const h = 140;
+  const pad = 12;
+  const ys = rows.map((p) => Number(p.n) || 0);
+  const min = Math.min(...ys);
+  const max = Math.max(...ys);
+  const span = Math.max(1, max - min);
+  const step = (w - pad * 2) / (rows.length - 1);
+  const xy = rows.map((p, i) => {
+    const x = pad + i * step;
+    const y = h - pad - ((Number(p.n) - min) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = rows[rows.length - 1];
+  return `<svg class="pulse-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline fill="none" stroke="#4c8dff" stroke-width="2" points="${xy.join(" ")}"/>
+    <text x="${w - 8}" y="16" text-anchor="end" fill="#8d97ab" font-size="11">${last.n} in hat @ ${last.height}</text>
+  </svg>`;
+}
+
+function luckRows(handles) {
+  const rows = (handles || []).filter((h) => (h.hat_blocks || 0) > 0).slice(0, 12);
+  if (!rows.length) return `<div class="empty">Need XVA1 hats to score luck.</div>`;
+  const max = Math.max(...rows.flatMap((h) => [h.wins || 0, h.expected_wins || 0]), 1);
+  return rows.map((h) => {
+    const act = (h.wins || 0) / max * 100;
+    const exp = (h.expected_wins || 0) / max * 100;
+    const luck = h.luck == null ? "—" : (h.luck >= 1 ? `+${((h.luck - 1) * 100).toFixed(0)}%` : `${((h.luck - 1) * 100).toFixed(0)}%`);
+    return `<div class="luck-row">
+      <div>${handle(h.handle)}</div>
+      <div class="luck-bars" title="gold = minutes won · blue = fair share if every hat was equal">
+        <i class="luck-exp" style="width:${exp}%"></i>
+        <i class="luck-act" style="width:${act}%"></i>
+      </div>
+      <div class="muted">${esc(luck)}</div>
+    </div>`;
+  }).join("");
 }
 
 async function pageHome() {
@@ -462,8 +590,13 @@ async function pageTx(id) {
         <b>Time</b><div>${fmtTime(t.time)}</div>
         <b>Fee</b><div>${t.coinbase ? "—" : atomsToXfer(t.fee)}</div>
         <b>Identity</b><div>${txIdentityHtml(t)}</div>
+        ${t.host_share ? `<b>Guest share</b><div>${t.host_share.guest_percent}% of a mature win at ${linkBlock(t.host_share.host_height)} · ${t.host_share.guest_count} guest${t.host_share.guest_count === 1 ? "" : "s"} · pot ${atomsToXfer(t.host_share.pot_amount)}</div>` : ""}
       </div>
     </div>
+    ${t.host_share ? `<div class="card" style="margin-bottom:16px">
+      <h2>Guests</h2>
+      ${(t.host_share.guests || []).map((g) => `<div class="winner"><div>${g.handle ? handle(g.handle) : linkAddr(g.address)}</div><div class="amt">${atomsToXfer(g.amount)}</div></div>`).join("") || `<div class="empty">No guest outputs decoded.</div>`}
+    </div>` : ""}
     <div class="io">
       <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">None</div>`}</div>
       <div class="arrow">→</div>
@@ -498,6 +631,10 @@ async function pageAddress(addr) {
           <h2>Lottery</h2>
           ${(a.lottery_wins || []).map((w) => `<div class="winner"><div>${linkBlock(w.height)} ${w.xaccount ? handle(w.xaccount) : `<span class="faint">no XVA1</span>`}</div><div class="amt">${atomsToXfer(w.amount)}</div></div>`).join("") || `<div class="empty">No wins.</div>`}
         </div>
+        ${(a.guest_shares || []).length ? `<div class="card" style="margin-top:16px">
+          <h2>Guest shares received</h2>
+          ${a.guest_shares.map((s) => `<div class="winner"><div>${linkTx(s.txid)} ${s.host_handle ? handle(s.host_handle) : ""} <span class="badge guest">${s.guest_percent}%</span></div><div class="amt">${atomsToXfer(s.amount)}</div></div>`).join("")}
+        </div>` : ""}
       </div>
     </div>`;
 }
@@ -746,7 +883,7 @@ async function pageIdentity(handleName) {
   app.innerHTML = `
     <p class="crumb"><a href="${membersHash("all", "")}">Members</a> / @${esc(name)}</p>
     <h1 class="page-title">@${esc(name)}</h1>
-    <p class="sub">${p.found ? "Lottery identity from coinbase XVA1 (the handle stays; payout addresses change)." : "This handle is not in the indexed hat or live eligible set yet."}</p>
+    <p class="sub">${p.found ? "Lottery identity from coinbase XVA1 (the handle stays; payout addresses change). Guest shares are wallet sends after a mature win — guests never enter the hat." : "This handle is not in the indexed hat, live eligible set, or guest-share index yet."}</p>
     <div class="grid stats">
       <div class="card stat"><span>Now</span><b>${p.eligible ? "eligible" : "offline"}</b></div>
       <div class="card stat"><span>Wins</span><b>${p.wins || 0}</b></div>
@@ -782,6 +919,28 @@ async function pageIdentity(handleName) {
           <thead><tr><th>Block</th><th>n</th></tr></thead>
           <tbody>
             ${(p.appearances || []).map((a) => `<tr><td>${linkBlock(a.height)}</td><td>${a.n ?? "—"}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">Not seen in an indexed XVA1 hat.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="grid two" style="margin-top:16px">
+      <div class="card">
+        <h2>Shares sent</h2>
+        <p class="muted">1.0.14 host send: a percent of a mature lottery output, split equally.</p>
+        <table>
+          <thead><tr><th>Tx</th><th>%</th><th>Guests</th><th>Pot</th></tr></thead>
+          <tbody>
+            ${(p.shares_sent || []).map((s) => `<tr><td>${linkTx(s.txid)}</td><td>${s.guest_percent}%</td><td>${s.guest_count}</td><td>${atomsToXfer(s.pot_amount)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No host share-outs indexed for this handle.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Guest receipts</h2>
+        <p class="muted">This handle never entered the hat for these amounts.</p>
+        <table>
+          <thead><tr><th>Tx</th><th>Host</th><th>Paid</th></tr></thead>
+          <tbody>
+            ${(p.shares_received || []).map((s) => `<tr><td>${linkTx(s.txid)}</td><td>${s.host_handle ? handle(s.host_handle) : "—"}</td><td>${atomsToXfer(s.amount)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No guest receipts indexed.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -851,7 +1010,7 @@ async function pageLottery() {
   app.innerHTML = `
     ${nodeBanner()}
     <h1 class="page-title">Lottery</h1>
-    <p class="sub">The baked seed prints every main block. Coinbase <code>XVA1</code> is the public roll (handle + id + stamp). The winner is who got paid — history and the leaderboard key on that <code>@handle</code>, not the payout address (addresses change; the handle does not). Live “active now” is <code>stamped_handles</code> when the node has it, otherwise the last indexed block’s XVA1 hat. Height 0 is not a payday.</p>
+    <p class="sub">The baked seed prints every main block. Coinbase <code>XVA1</code> is the public roll (handle + id + stamp). The winner is who got paid — history and the leaderboard key on that <code>@handle</code>, not the payout address (addresses change; the handle does not). Live “active now” is <code>stamped_handles</code> when the node has it, otherwise the last indexed block’s XVA1 hat. Height 0 is not a payday. From wallet <strong>1.0.14</strong>, a verified host can share a percent of a mature win with invited guests. That is a later wallet send. Guests never enter the hat.</p>
     <div class="grid two">
       ${lotteryCard(live, nodes, L.winner_handles)}
       <div class="card">
@@ -886,6 +1045,30 @@ async function pageLottery() {
           </tbody>
         </table>
       </div>
+    </div>
+    <div class="grid two" style="margin-top:16px">
+      <div class="card">
+        <h2>Guest shares</h2>
+        <p class="muted">Detected when a mature lottery coinbase is spent as a 1–100% equal split (wallet 1.0.14).</p>
+        <table>
+          <thead><tr><th>Tx</th><th>Host</th><th>%</th><th>Guests</th></tr></thead>
+          <tbody>
+            ${(L.recent_shares || []).map((s) => `<tr>
+              <td>${linkTx(s.txid)}</td>
+              <td>${s.host_handle ? handle(s.host_handle) : "—"}</td>
+              <td>${s.guest_percent}%</td>
+              <td>${s.guest_count}</td>
+            </tr>`).join("") || `<tr><td colspan="4" class="empty">No host share-outs indexed yet. They appear after a mature win is split.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>This wallet</h2>
+        ${L.wallet_share && typeof L.wallet_share === "object" && !L.wallet_share.error ? `
+          <p class="muted">${L.wallet_share.enabled ? `Sharing ${L.wallet_share.guest_percent || 0}% of each mature win.` : "Share lottery wins is off on the connected wallet."}${L.wallet_share.assetindex ? "" : " Asset index is off — the wallet must enable it once to look up guest roots."}</p>
+          ${(L.wallet_share.guests || []).map((g) => `<div class="winner"><div>${handle(g.handle)} ${g.ready ? `<span class="badge ok">ready</span>` : `<span class="badge">no holder</span>`}</div></div>`).join("") || `<div class="empty">No guests invited on this wallet.</div>`}
+        ` : `<div class="empty">Connect a 1.0.14 wallet to see its guest list. listguests is wallet-only and is not the hat.</div>`}
+      </div>
     </div>`;
   tickCountdown();
 }
@@ -917,6 +1100,71 @@ async function pageMempool() {
         </tbody>
       </table>
     </div>`;
+}
+
+function fmtXferShort(atoms) {
+  const n = Number(atoms || 0) / 1e8;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B XFER`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M XFER`;
+  if (n >= 1e3) return `${n.toLocaleString(undefined, { maximumFractionDigits: 0 })} XFER`;
+  return atomsToXfer(atoms);
+}
+
+async function pageStats() {
+  const S = await api("/stats?pulse=240");
+  const rem = 60 - (Math.floor(Date.now() / 1000) % 60);
+  const kinds = S.assets && S.assets.by_kind ? S.assets.by_kind : [];
+  app.innerHTML = `
+    <h1 class="page-title">Observatory</h1>
+    <p class="sub">Every height is one minute. Height 0 paid nothing — that is the fair launch. The gold ring is how far this chain has walked through ~${esc(S.years_of_emission)} years of emission. The blue ring is <em>this</em> minute.</p>
+    <div class="obs-hero">
+      <div class="card">${ringClock(S.emission_progress, String(rem).padStart(2, "0"))}</div>
+      <div class="grid stats">
+        <div class="card stat"><span>Minutes lived</span><b>${(S.minutes_lived || 0).toLocaleString()}</b></div>
+        <div class="card stat"><span>Issued</span><b>${fmtXferShort(S.issued_atoms)}</b></div>
+        <div class="card stat"><span>Lifetime</span><b>${fmtXferShort(S.lifetime_atoms)}</b></div>
+        <div class="card stat"><span>Next ½</span><b>${(S.years_to_halving || 0).toLocaleString()} yr</b></div>
+        <div class="card stat"><span>Paydays</span><b>${(S.paydays || 0).toLocaleString()}</b></div>
+        <div class="card stat"><span>Unique @wins</span><b>${S.unique_winners || 0}</b></div>
+        <div class="card stat"><span>Top handle</span><b>${((S.top_handle_share || 0) * 100).toFixed(1)}%</b></div>
+        <div class="card stat"><span>HHI</span><b>${(S.hhi || 0).toFixed(3)}</b></div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <h2>156-year staircase</h2>
+      <p class="muted">Subsidy halves every 2,100,000 minutes (~4 years). Each step is one era. The lit step is now. Winner count that minute rises by one at each ½.</p>
+      ${eraStairs(S.eras, S.height)}
+      <p class="muted" style="margin-top:10px">Era ${S.era} · ${fmtXferShort(S.subsidy_atoms)} / minute · next ½ at height ${(S.next_halving_height || 0).toLocaleString()} · last payday ${Number(S.last_paying_height || 0).toLocaleString()}</p>
+      <div class="launch-strip" title="Height 0 is unspendable genesis. Height 1+ is the lottery."><i></i><i></i></div>
+      <p class="muted">Black = genesis (no premine). Gold = every minute after is a public draw.</p>
+    </div>
+    <div class="grid two">
+      <div class="card">
+        <h2>The hat</h2>
+        <p class="muted">Distance from center is minutes won. One @handle is one ticket. Click a star.</p>
+        ${hatConstellation(S.handles)}
+      </div>
+      <div class="card">
+        <h2>Luck vs the math</h2>
+        <p class="muted">Blue is the fair share (1 / hat size each minute they stood in). Gold is minutes actually paid. Near 0% luck means the draw looks honest.</p>
+        ${luckRows(S.handles)}
+      </div>
+    </div>
+    <div class="grid two" style="margin-top:16px">
+      <div class="card">
+        <h2>Hat pulse</h2>
+        <p class="muted">How many XVA1 handles were in the hat each of the last ${ (S.hat_pulse || []).length } minutes.</p>
+        ${pulseChart(S.hat_pulse)}
+      </div>
+      <div class="card">
+        <h2>Identity ecology</h2>
+        <div class="kind-pills">
+          ${kinds.map((k) => `<div class="kind-pill"><b>${k.n}</b><span>${esc(k.kind || "asset")}</span></div>`).join("") || `<div class="empty">No assets yet.</div>`}
+          <div class="kind-pill"><b>${(S.assets && S.assets.ipfs) || 0}</b><span>IPFS</span></div>
+        </div>
+      </div>
+    </div>`;
+  tickCountdown();
 }
 
 async function pageNetwork() {
@@ -983,6 +1231,7 @@ const routes = [
   [/^#\/identity\/(.+)$/, (m) => pageIdentity(decodeURIComponent(m[1]))],
   [/^#\/members(?:\?.*)?$/, pageMembers],
   [/^#\/lottery$/, pageLottery],
+  [/^#\/stats$/, pageStats],
   [/^#\/rich$/, pageRich],
   [/^#\/mempool$/, pageMempool],
   [/^#\/network$/, pageNetwork],
