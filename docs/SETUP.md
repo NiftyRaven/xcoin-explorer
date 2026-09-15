@@ -4,8 +4,10 @@ This explorer is a **website on your computer**. It does not hold coins. It
 reads a running **X Coin wallet / node** and shows blocks, assets, lottery
 winners, and eligible `@handles` in a browser.
 
-You need **X Coin 1.0.13 or newer**. Do not stay on 1.0.12 if you need
-Claim My Asset to confirm.
+You need **X Coin 1.0.14 or newer**. Do not stay on 1.0.12 if you need
+Claim My Asset to confirm. 1.0.13 peers still follow this chain.
+**Share lottery wins** (host/guest split of a mature payout) is a wallet
+send on 1.0.14 — guests never enter the hat.
 
 ---
 
@@ -23,9 +25,10 @@ Claim My Asset to confirm.
 
 - Install **Python 3.11+** with `winget` if Python is missing (or open
   [python.org](https://www.python.org/downloads/windows/) if `winget` is not there)
-- Find **X Coin Wallet.exe**, or download official **1.0.13** from
+- Find **X Coin Wallet.exe** if it is already installed, or download the
+  **latest official** Windows zip from
   [NiftyRaven/x-coin Releases](https://github.com/NiftyRaven/x-coin/releases)
-  into `%LOCALAPPDATA%\XCoin-Wallet\1.0.13`
+  into `%LOCALAPPDATA%\XCoin-Wallet\<version>` (1.0.14 today)
 - Add only these **template** lines to the wallet config (no passwords):
 
   ```
@@ -45,10 +48,10 @@ chmod +x setup.sh start.sh
 ./setup.sh
 ```
 
-Same idea: install Python if needed (`apt` / `dnf`), find or download
-the official Linux 1.0.13 tarball into
-`~/.local/share/XCoin-Wallet/1.0.13`, add `server=1` (no passwords),
-start the wallet, then start the explorer.
+Same idea: install Python if needed (`apt` / `dnf`), use the wallet if
+it is already installed, otherwise download the latest official Linux
+tarball into `~/.local/share/XCoin-Wallet/<version>`, add `server=1`
+(no passwords), start the wallet, then start the explorer.
 
 Next time: `./start.sh`.
 
@@ -71,7 +74,7 @@ If the wallet is already installed somewhere else, set
 | Item | Why |
 | --- | --- |
 | **Windows** or **Linux x86_64** | What the wallet supports |
-| **X Coin wallet 1.0.13+** | [github.com/NiftyRaven/x-coin/releases](https://github.com/NiftyRaven/x-coin/releases) |
+| **X Coin wallet 1.0.14+** | [github.com/NiftyRaven/x-coin/releases](https://github.com/NiftyRaven/x-coin/releases) |
 | **Python 3.11 or newer** | Runs the explorer |
 | A web browser | Chrome, Firefox, Edge, … |
 
@@ -124,7 +127,7 @@ cd xcoin-explorer
 ### Option B — Release zip (no Git)
 
 1. Open [xcoin-explorer Releases](https://github.com/NiftyRaven/xcoin-explorer/releases).
-2. Download **XFER-Explorer-1.2.0.zip**.
+2. Download **XFER-Explorer-1.3.0.zip**.
 3. Right-click → **Extract All**.
 4. Open the folder and double-click **SETUP.bat** (Windows) or run
    `./setup.sh` (Linux).
@@ -168,16 +171,16 @@ xdg-open ~/.xcoin
 Practice / “Practice Wallet” uses a subfolder named `regtest`. Main XFER
 uses the folder above, not `regtest`.
 
-### 3c. Put `server=1` where 1.0.13 actually reads it
+### 3c. Put `server=1` where 1.0.14 actually reads it
 
-**X Coin 1.0.13** double-click reads the `xcoin.conf` **next to**
+**X Coin 1.0.14** double-click reads the `xcoin.conf` **next to**
 `X Coin Wallet.exe` (Windows) or **X Coin Wallet** (Linux). If that file
 has no `server=1`, port 38442 never opens and the explorer shows
 “node offline”.
 
 Do this in **every** `xcoin.conf` you have:
 
-1. The file in the extracted 1.0.13 wallet folder (same folder as the
+1. The file in the extracted 1.0.14 wallet folder (same folder as the
    start).
 2. The data-folder file from 3b (`%APPDATA%\XCoin\xcoin.conf` or
    `~/.xcoin/xcoin.conf`). Create it if it is missing.
@@ -195,7 +198,7 @@ next start (`%APPDATA%\XCoin\.cookie`). The explorer finds it. You never
 type it.
 
 If you later set `rpcuser` / `rpcpassword`, put those lines in the
-**same** 1.0.13 folder `xcoin.conf` the wallet reads, and copy only
+**same** 1.0.14 folder `xcoin.conf` the wallet reads, and copy only
 those two values into a local `explorer.toml`. Never commit that file.
 
 ### 3d. Open the wallet **once**
@@ -262,7 +265,7 @@ Use this only if cookie login keeps failing. Pick your own values.
 Never commit them.
 
 1. Pick a username and a **long random password**. Do not reuse a website password.
-2. In the wallet `xcoin.conf` the 1.0.13 start reads (next to
+2. In the wallet `xcoin.conf` the 1.0.14 start reads (next to
    **X Coin Wallet.exe**, and the data-folder file if you use both) add:
 
    ```

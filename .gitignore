@@ -18,6 +18,8 @@ data/*
 !data/.gitkeep
 dist/
 *.zip
+*.pem
+*.key
 *.log
 .DS_Store
 Thumbs.db

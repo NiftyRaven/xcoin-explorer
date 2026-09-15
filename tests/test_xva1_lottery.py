@@ -166,6 +166,13 @@ def test_xid1_is_not_lottery_identity(tmp_path: Path):
     search = q.search("@lampa")
     ids = [r["id"] for r in search["results"] if r["type"] == "identity"]
     assert "lampacenter" in ids
+    stats = q.chain_stats()
+    names = [h["handle"] for h in stats["handles"]]
+    assert "humble_miner" in names
+    humble = next(h for h in stats["handles"] if h["handle"] == "humble_miner")
+    assert humble["wins"] == 1
+    assert abs(humble["expected_wins"] - 1 / 3) < 0.001
+    assert stats["paydays"] == 1
     db.close()
 
 

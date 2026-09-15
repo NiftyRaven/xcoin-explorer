@@ -80,6 +80,27 @@ def winner_count(height: int, interval: int = HALVING_INTERVAL_MAIN) -> int:
     return halvings + 1
 
 
+def last_paying_height(interval: int = HALVING_INTERVAL_MAIN) -> int:
+    """Last height that still pays a non-zero subsidy."""
+    if interval <= 0:
+        interval = HALVING_INTERVAL_MAIN
+    last = 0
+    for era in range(64):
+        start = 1 if era == 0 else era * interval
+        if subsidy_at(start, interval) <= 0:
+            break
+        last = (era + 1) * interval - 1
+    return last
+
+
+def lifetime_supply(interval: int = HALVING_INTERVAL_MAIN) -> int:
+    return circulating_supply(last_paying_height(interval), interval)
+
+
+def minutes_per_year() -> int:
+    return 365 * 24 * 60 + 6 * 60  # 365.25 days
+
+
 def circulating_supply(height: int, interval: int = HALVING_INTERVAL_MAIN) -> int:
     """Spendable subsidy issued from height 1 through `height` (genesis pays 0)."""
     if height < 1:

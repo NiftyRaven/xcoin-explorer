@@ -225,6 +225,8 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
             "rpc_connected": bool(rpc.connected),
             "history": queries.lottery_history(30),
             "leaders": queries.lottery_leaders(40),
+            "recent_shares": queries.recent_shares(20),
+            "wallet_share": rpc.try_call("listguests", default=None) if rpc.connected else None,
         }
 
     @app.get("/api/lottery/members")
@@ -246,6 +248,10 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
         if not profile:
             return JSONResponse({"error": "invalid handle"}, status_code=400)
         return profile
+
+    @app.get("/api/stats")
+    def stats(pulse: int = 180):
+        return queries.chain_stats(pulse)
 
     @app.get("/api/lottery/winners")
     def lottery_winners(limit: int = 40, before: int | None = None):

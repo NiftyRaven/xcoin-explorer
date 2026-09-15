@@ -1,11 +1,11 @@
 # =============================================================================
 # Add these lines to the X Coin *wallet* config — not this explorer folder.
 #
-# X Coin 1.0.13+ reads the xcoin.conf NEXT TO the wallet start when you
+# X Coin 1.0.14+ reads the xcoin.conf NEXT TO the wallet start when you
 # double-click. Put server=1 in BOTH places if both files exist:
 #
 #   1) Next to "X Coin Wallet.exe" / "X Coin Wallet"
-#      (the folder you extracted from the 1.0.13 zip / tarball)
+#      (the folder you extracted from the 1.0.14 zip / tarball)
 #   2) Data folder
 #      Windows:  %APPDATA%\XCoin\xcoin.conf
 #                Win+R  →  type  %APPDATA%\XCoin  →  Enter
@@ -32,7 +32,7 @@ rpcallowip=127.0.0.1
 
 # --- Only if cookie login fails ---
 # Pick your own username and a long password. Put the SAME two values in
-# the wallet xcoin.conf the 1.0.13 start actually reads (usually the file
+# the wallet xcoin.conf the 1.0.14 start actually reads (usually the file
 # next to X Coin Wallet.exe) AND in a local explorer.toml
 # (rpc.user / rpc.password). Never share them. Never commit explorer.toml.
 #rpcuser=YOUR_RPC_USERNAME

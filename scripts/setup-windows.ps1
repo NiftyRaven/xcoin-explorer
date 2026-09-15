@@ -1,13 +1,15 @@
 # One-click prep for XFER Explorer on Windows.
 # No secrets: never writes rpcuser/rpcpassword, cookies, seeds, or keys.
+# If X Coin Wallet is already on this PC, use it. If not, download the
+# latest official zip from NiftyRaven/x-coin Releases.
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$WalletVersion = "1.0.13"
-$WalletUrl = "https://github.com/NiftyRaven/x-coin/releases/download/v$WalletVersion/X-Coin-1.0.13-Windows.zip"
-$WalletHome = Join-Path $env:LOCALAPPDATA "XCoin-Wallet\$WalletVersion"
+$FallbackVersion = "1.0.14"
+$FallbackUrl = "https://github.com/NiftyRaven/x-coin/releases/download/v$FallbackVersion/X-Coin-$FallbackVersion-Windows.zip"
+$WalletHome = Join-Path $env:LOCALAPPDATA "XCoin-Wallet"
 
 function Write-Step($msg) {
     Write-Host ""
@@ -70,39 +72,66 @@ function Ensure-ConfLine([string]$path, [string]$key, [string]$value) {
     Write-Host "Created $path (template, no secrets)"
 }
 
+function Get-LatestWalletRelease {
+    try {
+        $headers = @{ "User-Agent" = "XFER-Explorer-setup" }
+        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/NiftyRaven/x-coin/releases/latest" -Headers $headers
+        $asset = @($rel.assets) | Where-Object { $_.name -match '^X-Coin-.+-Windows\.zip$' } | Select-Object -First 1
+        if ($asset -and $asset.browser_download_url) {
+            $ver = [string]$rel.tag_name
+            if ($ver.StartsWith("v")) { $ver = $ver.Substring(1) }
+            Write-Host "Latest official wallet on GitHub: $ver"
+            return @{ Version = $ver; Url = [string]$asset.browser_download_url }
+        }
+    } catch {
+        Write-Host "Could not query GitHub Releases; using $FallbackVersion."
+    }
+    return @{ Version = $FallbackVersion; Url = $FallbackUrl }
+}
+
 function Find-WalletExe {
     if ($env:XCOIN_WALLET -and (Test-Path -LiteralPath $env:XCOIN_WALLET)) {
         return $env:XCOIN_WALLET
     }
-    $names = @("X Coin Wallet.exe", "xcoin-qt.exe")
+    foreach ($name in @("xcoin-qt", "X Coin Wallet")) {
+        $proc = Get-Process -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($proc -and $proc.Path -and (Test-Path -LiteralPath $proc.Path) -and ($proc.Path -notmatch "Practice")) {
+            return $proc.Path
+        }
+    }
     $roots = @(
         $Root,
         (Split-Path -Parent $Root),
         $WalletHome,
-        (Join-Path $env:USERPROFILE "Downloads\X-Coin-1.0.13-Windows"),
-        (Join-Path $env:USERPROFILE "Downloads")
-    ) | Where-Object { $_ -and (Test-Path $_) }
+        (Join-Path $env:USERPROFILE "Downloads"),
+        (Join-Path $env:USERPROFILE "Desktop"),
+        (Join-Path $env:LOCALAPPDATA "XCoin-Wallet")
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+    $hits = @()
     foreach ($base in $roots) {
-        foreach ($name in $names) {
-            $direct = Join-Path $base $name
-            if (Test-Path -LiteralPath $direct) { return $direct }
-        }
-        $hit = Get-ChildItem -LiteralPath $base -Filter "X Coin Wallet.exe" -Depth 4 -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch "Practice" } |
-            Select-Object -First 1
-        if ($hit) { return $hit.FullName }
+        $direct = Join-Path $base "X Coin Wallet.exe"
+        if (Test-Path -LiteralPath $direct) { $hits += Get-Item -LiteralPath $direct }
+        $qt = Join-Path $base "xcoin-qt.exe"
+        if ((Test-Path -LiteralPath $qt) -and ($qt -notmatch "Practice")) { $hits += Get-Item -LiteralPath $qt }
+        $found = Get-ChildItem -LiteralPath $base -Filter "X Coin Wallet.exe" -Depth 5 -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch "Practice" }
+        if ($found) { $hits += @($found) }
     }
+    $best = $hits | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($best) { return $best.FullName }
     return $null
 }
 
 function Install-Wallet {
-    Write-Host "Downloading official X Coin $WalletVersion (no keys in this repo)..."
-    $zip = Join-Path $env:TEMP "X-Coin-$WalletVersion-Windows.zip"
-    New-Item -ItemType Directory -Force -Path $WalletHome | Out-Null
-    Invoke-WebRequest -Uri $WalletUrl -OutFile $zip -UseBasicParsing
-    Expand-Archive -LiteralPath $zip -DestinationPath $WalletHome -Force
+    $rel = Get-LatestWalletRelease
+    Write-Host "No wallet found. Downloading official X Coin $($rel.Version) (no keys in this repo)..."
+    $dest = Join-Path $WalletHome $rel.Version
+    $zip = Join-Path $env:TEMP "X-Coin-$($rel.Version)-Windows.zip"
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Invoke-WebRequest -Uri $rel.Url -OutFile $zip -UseBasicParsing
+    Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
-    $exe = Get-ChildItem -LiteralPath $WalletHome -Filter "X Coin Wallet.exe" -Recurse -ErrorAction SilentlyContinue |
+    $exe = Get-ChildItem -LiteralPath $dest -Filter "X Coin Wallet.exe" -Recurse -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -notmatch "Practice" } |
         Select-Object -First 1
     if (-not $exe) { throw "Downloaded the wallet zip but could not find X Coin Wallet.exe." }
@@ -113,15 +142,20 @@ function Wallet-Running {
     return [bool](Get-Process -Name "xcoin-qt", "xcoind", "X Coin Wallet" -ErrorAction SilentlyContinue)
 }
 
-function Wait-Rpc {
+function Rpc-Ready {
     $cookie = Join-Path $env:APPDATA "XCoin\.cookie"
+    if (Test-Path -LiteralPath $cookie) { return $true }
+    try {
+        $listen = Get-NetTCPConnection -LocalPort 38442 -State Listen -ErrorAction SilentlyContinue
+        if ($listen) { return $true }
+    } catch { }
+    return $false
+}
+
+function Wait-Rpc {
     Write-Host "Waiting for wallet RPC (port 38442 or .cookie)..."
     for ($i = 0; $i -lt 60; $i++) {
-        if (Test-Path -LiteralPath $cookie) { return $true }
-        try {
-            $listen = Get-NetTCPConnection -LocalPort 38442 -State Listen -ErrorAction SilentlyContinue
-            if ($listen) { return $true }
-        } catch { }
+        if (Rpc-Ready) { return $true }
         Start-Sleep -Seconds 2
     }
     return $false
@@ -139,9 +173,11 @@ if (-not $py) {
 if (-not $py) { throw "Python is still not on PATH. Close this window, open a new one, run SETUP.bat again." }
 Write-Host "Using $py"
 
-Write-Step "X Coin wallet 1.0.13+"
+Write-Step "X Coin wallet"
 $wallet = Find-WalletExe
-if (-not $wallet) {
+if ($wallet) {
+    Write-Host "Found installed wallet."
+} else {
     $wallet = Install-Wallet
 }
 Write-Host "Wallet: $wallet"
@@ -158,15 +194,21 @@ Ensure-ConfLine $dataConf "rpcallowip" "127.0.0.1"
 
 Write-Step "Start wallet if needed"
 if (Wallet-Running) {
-    Write-Host "Wallet already running. Leave it open."
+    if (Rpc-Ready) {
+        Write-Host "Wallet already running with RPC. Leave it open."
+    } else {
+        Write-Host "Wallet is open but RPC is not on 38442."
+        Write-Host "Fully quit it (tray icon -> Exit), then run SETUP.bat again so server=1 is read."
+        exit 2
+    }
 } else {
     Start-Process -FilePath $wallet
     Write-Host "Started X Coin Wallet. Finish any first-run 12-word screen in that window."
-}
-if (-not (Wait-Rpc)) {
-    Write-Host "RPC is not up yet. When the wallet has finished loading, run start.bat."
-    Write-Host "If it stays offline, see docs\TROUBLESHOOTING.md"
-    exit 2
+    if (-not (Wait-Rpc)) {
+        Write-Host "RPC is not up yet. When the wallet has finished loading, run start.bat."
+        Write-Host "If it stays offline, see docs\TROUBLESHOOTING.md"
+        exit 2
+    }
 }
 
 Write-Host ""
