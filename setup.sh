@@ -6,11 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FALLBACK_VERSION="1.0.15"
-FALLBACK_URL="https://github.com/NiftyRaven/x-coin/releases/download/v${FALLBACK_VERSION}/X-Coin-${FALLBACK_VERSION}-Linux-x86_64.tar.gz"
 WALLET_HOME="${XCOIN_WALLET_HOME:-$HOME/.local/share/XCoin-Wallet}"
-WALLET_VERSION="$FALLBACK_VERSION"
-WALLET_URL="$FALLBACK_URL"
+WALLET_VERSION=""
+WALLET_URL=""
 
 step() { printf '\n==> %s\n' "$1"; }
 
@@ -61,32 +59,21 @@ resolve_latest_wallet() {
     json="$(wget -qO- --header='User-Agent: XFER-Explorer-setup' \
       'https://api.github.com/repos/NiftyRaven/x-coin/releases?per_page=20' 2>/dev/null || true)"
   fi
-  pair="$(printf '%s' "$json" | python3 -c '
+  pair="$(printf '%s' "$json" | PYTHONPATH="$PWD" python3 -c '
 import json, sys
+from explorer.wallet_release import FALLBACK_LINUX, FALLBACK_VERSION, pick_linux_tarball
 try:
     rels = json.load(sys.stdin)
 except Exception:
+    print(FALLBACK_VERSION + " " + FALLBACK_LINUX)
     raise SystemExit(0)
 if not isinstance(rels, list):
     rels = [rels]
-best = None
-for rel in rels:
-    if rel.get("draft") or rel.get("prerelease"):
-        continue
-    tag = (rel.get("tag_name") or "").lstrip("v")
-    try:
-        key = tuple(int(p) for p in tag.split("."))
-    except ValueError:
-        continue
-    for a in rel.get("assets") or []:
-        name = a.get("name") or ""
-        if name.startswith("X-Coin-") and name.endswith("-Linux-x86_64.tar.gz"):
-            url = a.get("browser_download_url") or ""
-            if url and (best is None or key > best[0]):
-                best = (key, tag, url)
-            break
-if best:
-    print(best[1] + " " + best[2])
+picked = pick_linux_tarball(rels)
+if picked:
+    print(picked[0] + " " + picked[1])
+else:
+    print(FALLBACK_VERSION + " " + FALLBACK_LINUX)
 ' 2>/dev/null || true)"
   ver="${pair%% *}"
   url="${pair#* }"
@@ -96,8 +83,9 @@ if best:
     echo "Newest official wallet tarball: ${WALLET_VERSION}"
     return 0
   fi
-  WALLET_VERSION="$FALLBACK_VERSION"
-  WALLET_URL="$FALLBACK_URL"
+  pair="$(PYTHONPATH="$PWD" python3 -c 'from explorer.wallet_release import FALLBACK_LINUX, FALLBACK_VERSION; print(FALLBACK_VERSION + " " + FALLBACK_LINUX)')"
+  WALLET_VERSION="${pair%% *}"
+  WALLET_URL="${pair#* }"
   echo "Could not query GitHub Releases; using ${WALLET_VERSION}."
 }
 

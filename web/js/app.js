@@ -309,7 +309,7 @@ function txIdentityHtml(t) {
   return t.xid_handle ? handle(t.xid_handle) : "—";
 }
 
-function lotteryCard(live, nodes, winnerHandles) {
+function lotteryCard(live, nodes, winnerHandles, activeCount) {
   const L = live || {};
   const rewards = L.rewards || [];
   const mapped = winnerHandles || [];
@@ -320,7 +320,13 @@ function lotteryCard(live, nodes, winnerHandles) {
         return `<div class="winner"><div class="who"><span class="badge lottery">winner</span> ${who}</div><div class="amt">${atomsToXfer(rewards[i] || 0)}</div></div>`;
       }).join("")
     : `<div class="empty">No eligible X Verified nodes in the live draw yet.</div>`;
-  const activeN = (nodes || []).length || L.active_nodes || 0;
+  const fromApi = Number(activeCount);
+  const fromWallet = Number(L.active_nodes);
+  const activeN = Number.isFinite(fromApi)
+    ? fromApi
+    : Number.isFinite(fromWallet)
+      ? fromWallet
+      : ((nodes || []).length || 0);
   const slot = L.slot;
   return `
     <div class="card">
@@ -494,7 +500,7 @@ async function pageHome() {
         </table>
         <div class="row-actions"><a href="#/blocks">All blocks →</a></div>
       </div>
-      ${lotteryCard(lottery.live, lottery.nodes, lottery.winner_handles)}
+      ${lotteryCard(lottery.live, lottery.nodes, lottery.winner_handles, lottery.active_count)}
     </div>
     <div class="card" style="margin-top:16px">
       <h2>Recent lottery winners</h2>
@@ -1010,11 +1016,11 @@ async function pageLottery() {
   app.innerHTML = `
     ${nodeBanner()}
     <h1 class="page-title">Lottery</h1>
-    <p class="sub">The baked seed prints every main block. Coinbase <code>XVA1</code> is the public roll (handle + id + stamp). The winner is who got paid — history and the leaderboard key on that <code>@handle</code>, not the payout address (addresses change; the handle does not). Live “active now” is <code>stamped_handles</code> when the node has it, otherwise the last indexed block’s XVA1 hat. Height 0 is not a payday. From wallet <strong>1.0.14</strong>, a verified host can share a percent of a mature win with invited guests. That is a later wallet send. Guests never enter the hat.</p>
+    <p class="sub">The baked seed prints every main block. Coinbase <code>XVA1</code> is the public roll (handle + id + stamp). The winner is who got paid — history and the leaderboard key on that <code>@handle</code>, not the payout address (addresses change; the handle does not). Live “N active” is <code>getlotteryinfo.active_nodes</code> from the connected wallet (1.0.16+ this is live heartbeats; older wallets reported the frozen hat size). Handle chips still come from <code>stamped_handles</code> or the last indexed <code>XVA1</code>. Height 0 is not a payday. From wallet <strong>1.0.14</strong>, a verified host can share a percent of a mature win with invited guests. That is a later wallet send. Guests never enter the hat.</p>
     <div class="grid two">
-      ${lotteryCard(live, nodes, L.winner_handles)}
+      ${lotteryCard(live, nodes, L.winner_handles, L.active_count)}
       <div class="card">
-        <h2>Active now</h2>
+        <h2>Active now${(L.active_count != null || live.active_nodes != null) ? ` · ${L.active_count ?? live.active_nodes}` : ""}</h2>
         ${liveHint}
         <p class="muted" style="margin-top:12px">Eligible locally: ${live.local_eligible ? "yes" : "no"} · verified: ${live.local_x_verified ? "yes" : "no"} · @${esc(live.local_xaccount || "—")}</p>
         <div class="row-actions"><a href="#/members">Browse all eligible members →</a></div>
@@ -1067,7 +1073,7 @@ async function pageLottery() {
         ${L.wallet_share && typeof L.wallet_share === "object" && !L.wallet_share.error ? `
           <p class="muted">${L.wallet_share.enabled ? `Sharing ${L.wallet_share.guest_percent || 0}% of each mature win.` : "Share lottery wins is off on the connected wallet."}${L.wallet_share.assetindex ? "" : " Asset index is off — the wallet must enable it once to look up guest roots."}</p>
           ${(L.wallet_share.guests || []).map((g) => `<div class="winner"><div>${handle(g.handle)} ${g.ready ? `<span class="badge ok">ready</span>` : `<span class="badge">no holder</span>`}</div></div>`).join("") || `<div class="empty">No guests invited on this wallet.</div>`}
-        ` : `<div class="empty">Connect a 1.0.14 wallet to see its guest list. listguests is wallet-only and is not the hat.</div>`}
+        ` : `<div class="empty">Connect a local wallet to see its guest list. listguests is wallet-only and is not the hat.</div>`}
       </div>
     </div>`;
   tickCountdown();

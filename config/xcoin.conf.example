@@ -1,7 +1,7 @@
 # =============================================================================
 # Add these lines to the X Coin *wallet* config — not this explorer folder.
 #
-# X Coin 1.0.13+ (Light 1.0.14 / Heavy 1.0.15) reads the xcoin.conf NEXT TO
+# X Coin 1.0.13+ (Light or Heavy) reads the xcoin.conf NEXT TO
 # the wallet start when you double-click. Put server=1 in BOTH places if
 # both files exist:
 #
