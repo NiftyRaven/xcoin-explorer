@@ -73,27 +73,37 @@ function Ensure-ConfLine([string]$path, [string]$key, [string]$value) {
 }
 
 function Get-LatestWalletRelease {
-    # GitHub "latest" can stay on Light 1.0.14 while Heavy 1.0.15 is newer.
-    # Pick the highest version tag that actually has a wallet zip.
+    # GitHub "latest" can stay on an older Light zip. Parse tags like
+    # v1.0.16-light as 1.0.16 and pick the highest numeric version.
+    # Prefer Heavy when Light and Heavy share that version.
     try {
         $headers = @{ "User-Agent" = "XFER-Explorer-setup" }
         $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/NiftyRaven/x-coin/releases?per_page=20" -Headers $headers
+        $bestKey = $null
+        $bestRank = -1
         $bestVer = $null
         $bestUrl = $null
         foreach ($rel in @($rels)) {
             if ($rel.draft -or $rel.prerelease) { continue }
             $asset = @($rel.assets) | Where-Object { $_.name -match '^X-Coin-.+-Windows\.zip$' } | Select-Object -First 1
             if (-not $asset -or -not $asset.browser_download_url) { continue }
-            $ver = ([string]$rel.tag_name).TrimStart("v")
-            try { $parsed = [version]$ver } catch { continue }
-            if (-not $bestVer -or $parsed -gt $bestVer) {
-                $bestVer = $parsed
+            $raw = ([string]$rel.tag_name).TrimStart("v")
+            if ($raw -notmatch '^(\d+(?:\.\d+){1,3})') { continue }
+            $parsed = [version]$Matches[1]
+            $blob = ("{0} {1} {2}" -f $rel.name, $rel.tag_name, $asset.name).ToLower()
+            $rank = 0
+            if ($blob -match "heavy") { $rank = 2 }
+            elseif ($blob -match "light") { $rank = 1 }
+            if (-not $bestKey -or $parsed -gt $bestKey -or ($parsed -eq $bestKey -and $rank -gt $bestRank)) {
+                $bestKey = $parsed
+                $bestRank = $rank
+                $bestVer = $Matches[1]
                 $bestUrl = [string]$asset.browser_download_url
             }
         }
         if ($bestUrl) {
             Write-Host "Newest official wallet zip: $bestVer"
-            return @{ Version = $bestVer.ToString(); Url = $bestUrl }
+            return @{ Version = $bestVer; Url = $bestUrl }
         }
     } catch { }
     Write-Host "Could not query GitHub Releases; using $FallbackVersion."

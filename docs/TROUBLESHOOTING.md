@@ -19,7 +19,7 @@ Task Manager (Ctrl+Shift+Esc) should show **xcoin-qt** (GUI) **or**
 
 ### 2. Did you set `server=1` in the file the wallet reads?
 
-X Coin **1.0.13+** (Light 1.0.14 / Heavy 1.0.15) double-click reads `xcoin.conf` **next to**
+X Coin **1.0.13+** (Light or Heavy) double-click reads `xcoin.conf` **next to**
 `X Coin Wallet.exe`, not only `%APPDATA%\XCoin\xcoin.conf`.
 
 Open both (if they exist) and add a line that is exactly:
@@ -65,7 +65,7 @@ one wallet.
 
 Follow **Optional: password instead of cookie** in [SETUP.md](SETUP.md).
 Username and password must match in the `xcoin.conf` next to
-**X Coin Wallet.exe** (1.0.14 Light or 1.0.15 Heavy) **and** `explorer.toml`.
+**X Coin Wallet.exe** (1.0.13+ Light or Heavy) **and** `explorer.toml`.
 
 ---
 
@@ -112,11 +112,13 @@ wallet packages ship `addnode` / `seednode`. Do not invent a host.
 
 ## Lottery “0 active”
 
-Live “active now” is `getlotteryinfo.stamped_handles` when the connected
-node has it (the baked seed prints every main block). Otherwise the
-explorer shows the last indexed block’s coinbase `XVA1` handles. It does
-**not** treat `getactivenodes` as the hat — a player wallet often omits
-itself.
+Live “N active” is `getlotteryinfo.active_nodes` from the connected
+wallet. From **1.0.16** that is live X Verified heartbeats. Older wallets
+reported the frozen draw-hat size. Handle chips still prefer
+`stamped_handles` when the node has it (the baked seed prints every
+main block), else the last indexed coinbase `XVA1` handles. The explorer
+does **not** treat `getactivenodes` as the hat — a player wallet often
+omits itself.
 
 Historical winners come from each block’s coinbase `XVA1` (handle + id +
 stamp). The winner is who got paid. Payout addresses change; `@handle`

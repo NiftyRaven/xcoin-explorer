@@ -216,10 +216,17 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
                 if h:
                     winner_handles.append(h)
         nodes = [{"xaccount": h} for h in hat]
+        active_count = None
+        if live is not None and live.get("active_nodes") is not None:
+            try:
+                active_count = int(live.get("active_nodes"))
+            except (TypeError, ValueError):
+                active_count = None
         return {
             "live": live,
             "nodes": nodes,
             "active_handles": hat,
+            "active_count": active_count if active_count is not None else len(hat),
             "heartbeat_handles": heartbeat,
             "winner_handles": winner_handles,
             "rpc_connected": bool(rpc.connected),

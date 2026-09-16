@@ -19,7 +19,7 @@ def test_health_and_home(tmp_path: Path):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["coin"] == "XFER"
-    assert r.json()["version"] == "1.3.1"
+    assert r.json()["version"] == "1.3.2"
     status = client.get("/api/status").json()
     assert "indexed_height" in status
     home = client.get("/")
@@ -43,6 +43,8 @@ def test_health_and_home(tmp_path: Path):
     assert "Observatory" in text
     assert "guest share" in text
     assert "Share lottery wins" in text
+    assert "active_nodes" in text
+    assert "active_count" in text
     assert "producer" not in text
     stats = client.get("/api/stats")
     assert stats.status_code == 200
@@ -69,5 +71,37 @@ def test_health_and_home(tmp_path: Path):
         assert "releases?per_page=" in blob
         assert "Found installed wallet" in blob
         assert "No wallet found" in blob
-        assert "1.0.15" in blob
+        assert "wallet_release" in blob or "1.0.16-light" in blob or r"(\d+(?:\.\d+){1,3})" in blob
+    db.close()
+
+
+class _FakeWallet:
+    connected = True
+
+    def __init__(self, info):
+        self.info = info
+
+    def try_call(self, method, *params, default=None):
+        if method == "getlotteryinfo":
+            return self.info
+        if method == "getactivenodes":
+            return []
+        return default
+
+
+def test_lottery_uses_wallet_active_nodes_and_falls_back(tmp_path: Path):
+    db = Database(tmp_path / "t.db")
+    live_rpc = _FakeWallet(
+        {"active_nodes": 7, "stamped_handles": ["alice", "bob"], "winners": []}
+    )
+    indexer = Indexer(db, live_rpc)
+    client = TestClient(create_app(Queries(db), indexer, live_rpc))
+    payload = client.get("/api/lottery").json()
+    assert payload["active_count"] == 7
+    assert payload["active_handles"] == ["alice", "bob"]
+
+    old_rpc = _FakeWallet({"stamped_handles": ["alice", "bob"], "winners": []})
+    old_client = TestClient(create_app(Queries(db), Indexer(db, old_rpc), old_rpc))
+    old_payload = old_client.get("/api/lottery").json()
+    assert old_payload["active_count"] == 2
     db.close()

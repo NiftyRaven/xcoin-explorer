@@ -1,5 +1,5 @@
-XFER Explorer 1.3.1
-A local website for X Coin (XFER) 1.0.14 Light / 1.0.15 Heavy
+XFER Explorer 1.3.2
+A local website for X Coin (XFER) 1.0.13+ Light or Heavy
 Blocks, assets, lottery, eligible @handles, Observatory, guest shares.
 This is not a wallet. It cannot spend coins.
 
@@ -12,7 +12,7 @@ That script will:
   - install Python 3.11+ if needed
   - use X Coin Wallet if it is already installed
   - otherwise download the newest official wallet zip from GitHub Releases
-    (1.0.15 Heavy today; Light 1.0.14 also works — same chain; no keys in this zip)
+    (newest official zip; Light or Heavy — same chain; no keys in this zip)
   - add server=1 to the wallet config (no passwords)
   - start the wallet if it is not running
   - start this explorer at http://127.0.0.1:8080
@@ -27,7 +27,7 @@ MANUAL (if one-click cannot run)
 Windows
   1. Install Python 3.11+ from https://www.python.org/downloads/
      Tick "Add python.exe to PATH" on the first screen.
-  2. Install X Coin 1.0.15 Heavy or 1.0.14 Light (not 1.0.12):
+  2. Install X Coin 1.0.13+ Light or Heavy (not 1.0.12):
      https://github.com/NiftyRaven/x-coin/releases
   3. Fully quit X Coin Wallet (tray icon -> Exit).
   4. Add this line to xcoin.conf NEXT TO "X Coin Wallet.exe"
@@ -41,7 +41,7 @@ Windows
 
 Linux
   1. sudo apt install python3 python3-venv python3-pip
-  2. Install X Coin 1.0.15 Heavy or 1.0.14 Light (Linux x86_64 tarball) from Releases.
+  2. Install X Coin 1.0.13+ Light or Heavy (Linux x86_64 tarball) from Releases.
   3. Add server=1 next to "X Coin Wallet" and in ~/.xcoin/xcoin.conf
   4. Start the wallet, then:  chmod +x start.sh && ./start.sh
 
