@@ -28,4 +28,7 @@ host = "127.0.0.1"
 port = 8080
 database = "data/xcoin-explorer.db"
 batch_size = 40
-poll_seconds = 4
+# One poll per block once the tip is caught up. Matches X Coin block /
+# lottery slot time (BLOCK_TIME_SECONDS = 60). While catching up, the
+# indexer does not wait this long.
+poll_seconds = 60

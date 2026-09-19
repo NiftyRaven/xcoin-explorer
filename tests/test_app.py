@@ -22,6 +22,7 @@ def test_health_and_home(tmp_path: Path):
     assert r.json()["version"] == "1.3.2"
     status = client.get("/api/status").json()
     assert "indexed_height" in status
+    assert status["block_time_seconds"] == 60
     home = client.get("/")
     assert home.status_code == 200
     assert "XFER Explorer" in home.text
@@ -46,6 +47,19 @@ def test_health_and_home(tmp_path: Path):
     assert "active_nodes" in text
     assert "active_count" in text
     assert "producer" not in text
+    assert "8000" not in text
+    assert "setInterval(() => {\n  refreshStatus();" not in text
+    assert "pollTipAndMaybeReload" in text
+    assert "scheduleLiveRefresh" in text
+    assert "DEFAULT_BLOCK_TIME_SECONDS" in text
+    assert "/tip" in text
+    tip = client.get("/api/tip")
+    assert tip.status_code == 200
+    tip_body = tip.json()
+    assert "hash" in tip_body
+    assert "height" in tip_body
+    assert tip_body["block_time_seconds"] == 60
+    assert tip_body["slot_seconds"] == 60
     stats = client.get("/api/stats")
     assert stats.status_code == 200
     assert "handles" in stats.json()

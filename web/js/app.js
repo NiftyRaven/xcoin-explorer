@@ -1,7 +1,11 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const app = $("#app");
+const DEFAULT_BLOCK_TIME_SECONDS = 60;
 let STATUS = null;
 let pollTimer = null;
+let lastTipKey = "";
+let lastIndexing = null;
+let liveRefreshInFlight = false;
 
 async function api(path) {
   const r = await fetch("/api" + path);
@@ -242,25 +246,112 @@ function closeLightbox() {
   if (box) box.remove();
 }
 
-async function refreshStatus() {
-  try {
-    STATUS = await api("/status");
-    const pill = $("#pill-rpc");
-    const h = $("#pill-height");
-    if (STATUS.rpc_connected) {
-      pill.textContent = `node · ${STATUS.network_label || STATUS.network}`;
+function blockTimeSeconds() {
+  const n = Number(STATUS?.block_time_seconds ?? STATUS?.slot_seconds);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_BLOCK_TIME_SECONDS;
+}
+
+function applyStatusPills(s) {
+  if (!s) return;
+  const pill = $("#pill-rpc");
+  const h = $("#pill-height");
+  if (pill) {
+    if (s.rpc_connected) {
+      if (s.network_label || s.network) {
+        pill.textContent = `node · ${s.network_label || s.network}`;
+      }
       pill.className = "pill ok";
     } else {
       pill.textContent = "node offline";
       pill.className = "pill bad";
     }
-    const height = STATUS.tip ?? STATUS.indexed_height;
-    h.textContent = `height ${height < 0 ? "—" : height}${STATUS.indexing ? " …" : ""}`;
-    $("#foot-net").textContent = STATUS.network_label || "";
+  }
+  if (h) {
+    const height = s.tip ?? s.height ?? s.indexed_height;
+    h.textContent = `height ${height < 0 || height == null ? "—" : height}${s.indexing ? " …" : ""}`;
+  }
+  if (s.network_label) $("#foot-net").textContent = s.network_label;
+}
+
+async function refreshStatus() {
+  try {
+    STATUS = await api("/status");
+    applyStatusPills(STATUS);
   } catch (e) {
     $("#pill-rpc").textContent = "explorer error";
     $("#pill-rpc").className = "pill bad";
   }
+}
+
+function tipKey(tip) {
+  return `${tip.hash || ""}:${tip.height ?? ""}`;
+}
+
+function livePagesNeedReload() {
+  const h = location.hash || "#/";
+  return h === "#/" || h === "#/lottery" || (h.startsWith("#/members") && document.activeElement?.id !== "member-q");
+}
+
+async function pollTipAndMaybeReload() {
+  if (liveRefreshInFlight) return;
+  liveRefreshInFlight = true;
+  try {
+    const tip = await api("/tip");
+    if (STATUS) {
+      STATUS.tip = tip.height ?? STATUS.tip;
+      STATUS.indexed_height = tip.indexed_height ?? STATUS.indexed_height;
+      STATUS.indexing = tip.indexing;
+      STATUS.best_hash = tip.hash || STATUS.best_hash;
+      STATUS.slot_seconds = tip.slot_seconds || STATUS.slot_seconds;
+      STATUS.block_time_seconds = tip.block_time_seconds || STATUS.block_time_seconds;
+      if (typeof tip.rpc_connected === "boolean") STATUS.rpc_connected = tip.rpc_connected;
+    }
+    applyStatusPills({
+      ...(STATUS || {}),
+      height: tip.height,
+      indexed_height: tip.indexed_height,
+      indexing: tip.indexing,
+      rpc_connected: tip.rpc_connected,
+    });
+    const key = tipKey(tip);
+    const caughtUp = lastIndexing === true && tip.indexing === false;
+    if (!lastTipKey) {
+      lastTipKey = key;
+      lastIndexing = tip.indexing;
+      return;
+    }
+    if (key !== lastTipKey || caughtUp) {
+      lastTipKey = key;
+      lastIndexing = tip.indexing;
+      await refreshStatus();
+      if (livePagesNeedReload()) await route();
+      return;
+    }
+    lastIndexing = tip.indexing;
+  } catch {
+    /* next slot retries */
+  } finally {
+    liveRefreshInFlight = false;
+  }
+}
+
+function msUntilNextBlockPoll() {
+  const spacing = blockTimeSeconds() * 1000;
+  const rem = spacing - (Date.now() % spacing);
+  return Math.max(250, rem + 500);
+}
+
+function nextLiveRefreshMs() {
+  if (STATUS?.indexing) return Math.min(5000, blockTimeSeconds() * 1000);
+  return msUntilNextBlockPoll();
+}
+
+function scheduleLiveRefresh() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    await pollTipAndMaybeReload();
+    scheduleLiveRefresh();
+  }, nextLiveRefreshMs());
 }
 
 function nodeBanner() {
@@ -342,7 +433,8 @@ function lotteryCard(live, nodes, winnerHandles, activeCount) {
 }
 
 function tickCountdown() {
-  const rem = 60 - (Math.floor(Date.now() / 1000) % 60);
+  const slot = blockTimeSeconds();
+  const rem = slot - (Math.floor(Date.now() / 1000) % slot);
   const el = $("#cd");
   if (el) el.textContent = `0:${String(rem).padStart(2, "0")}`;
   const sec = $("#obs-sec");
@@ -350,8 +442,8 @@ function tickCountdown() {
   const arc = $("#obs-sec-arc");
   if (arc) {
     const c = 2 * Math.PI * 52;
-    const spent = 60 - rem;
-    arc.setAttribute("stroke-dasharray", `${(spent / 60) * c} ${c}`);
+    const spent = slot - rem;
+    arc.setAttribute("stroke-dasharray", `${(spent / slot) * c} ${c}`);
   }
 }
 
@@ -1118,7 +1210,7 @@ function fmtXferShort(atoms) {
 
 async function pageStats() {
   const S = await api("/stats?pulse=240");
-  const rem = 60 - (Math.floor(Date.now() / 1000) % 60);
+  const rem = blockTimeSeconds() - (Math.floor(Date.now() / 1000) % blockTimeSeconds());
   const kinds = S.assets && S.assets.by_kind ? S.assets.by_kind : [];
   app.innerHTML = `
     <h1 class="page-title">Observatory</h1>
@@ -1271,12 +1363,7 @@ $("#search-form").addEventListener("submit", (e) => {
 });
 
 window.addEventListener("hashchange", route);
-route();
+route().finally(() => scheduleLiveRefresh());
 setInterval(() => {
   tickCountdown();
 }, 1000);
-setInterval(() => {
-  refreshStatus();
-  const h = location.hash || "#/";
-  if (h === "#/" || h === "#/lottery" || (h.startsWith("#/members") && document.activeElement?.id !== "member-q")) route();
-}, 8000);
