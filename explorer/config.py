@@ -7,6 +7,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from explorer.chain import BLOCK_TIME_SECONDS
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 
@@ -68,7 +70,7 @@ class Settings:
     bind_port: int = 8080
     database: Path = field(default_factory=lambda: DATA_DIR / "xcoin-explorer.db")
     batch_size: int = 40
-    poll_seconds: float = 4.0
+    poll_seconds: float = float(BLOCK_TIME_SECONDS)
 
     def rpc_url(self, port: int | None = None) -> str:
         p = port if port is not None else (self.rpc_port or 38442)

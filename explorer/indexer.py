@@ -8,6 +8,8 @@ from typing import Any
 
 from explorer.amounts import xfer_to_atoms
 from explorer.chain import (
+    BLOCK_TIME_SECONDS,
+    block_poll_delay,
     classify_asset_name,
     halving_interval_for_network,
     slot_from_height,
@@ -39,7 +41,13 @@ def _atoms(value: Any) -> int:
 
 
 class Indexer:
-    def __init__(self, db: Database, rpc: XCoinRPC, batch_size: int = 40, poll_seconds: float = 4.0):
+    def __init__(
+        self,
+        db: Database,
+        rpc: XCoinRPC,
+        batch_size: int = 40,
+        poll_seconds: float = BLOCK_TIME_SECONDS,
+    ):
         self.db = db
         self.rpc = rpc
         self.batch_size = batch_size
@@ -89,8 +97,28 @@ class Indexer:
                         self._live_nodes = {}
             except Exception as e:
                 self.status["error"] = str(e)
-            self._stop.wait(self.poll_seconds)
+            self._stop.wait(self._next_poll_delay())
         self.status["running"] = False
+
+    def _tip_block_time(self) -> int | None:
+        row = self.db.conn.execute(
+            "SELECT time FROM blocks ORDER BY height DESC LIMIT 1"
+        ).fetchone()
+        if not row or row["time"] is None:
+            return None
+        try:
+            t = int(row["time"])
+        except (TypeError, ValueError):
+            return None
+        return t if t > 0 else None
+
+    def _next_poll_delay(self) -> float:
+        return block_poll_delay(
+            indexing=bool(self.status.get("indexing")),
+            now=time.time(),
+            poll_seconds=self.poll_seconds,
+            tip_time=self._tip_block_time(),
+        )
 
     def tick(self) -> None:
         info = self.rpc.call("getblockchaininfo")

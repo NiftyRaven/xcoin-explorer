@@ -1,7 +1,10 @@
 from explorer.amounts import format_xfer, xfer_to_atoms
 from explorer.chain import (
+    BLOCK_TIME_SECONDS,
     COIN,
     INITIAL_SUBSIDY,
+    SLOT_SECONDS,
+    block_poll_delay,
     circulating_supply,
     classify_asset_name,
     last_paying_height,
@@ -47,6 +50,19 @@ def test_slot_mapping():
     genesis = 1_789_197_360
     assert slot_from_height(0, genesis) == genesis // 60
     assert slot_from_height(1, genesis) == genesis // 60 + 1
+    assert SLOT_SECONDS == 60
+    assert BLOCK_TIME_SECONDS == SLOT_SECONDS
+
+
+def test_block_poll_delay_follows_block_time():
+    assert block_poll_delay(indexing=True, now=100.0) == 0.0
+    # 10s after tip → wait remaining 50s of the 60s slot
+    assert block_poll_delay(indexing=False, now=1_000_010.0, tip_time=1_000_000) == 50.0
+    # tip older than one block → unix slot boundary (100.0 % 60 = 40 → 20s left)
+    assert block_poll_delay(indexing=False, now=100.0, tip_time=1) == 20.0
+    # no tip timestamp → same slot-clock fallback
+    assert block_poll_delay(indexing=False, now=100.0) == 20.0
+    assert block_poll_delay(indexing=False, now=60.0) == 60.0
 
 
 def test_format_xfer():

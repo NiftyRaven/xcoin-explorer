@@ -9,7 +9,15 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from explorer import __version__
-from explorer.chain import GENESIS_HASH_MAIN, GENESIS_TIME_MAIN, NAME, SLOT_SECONDS, SUBUNIT, TICKER
+from explorer.chain import (
+    BLOCK_TIME_SECONDS,
+    GENESIS_HASH_MAIN,
+    GENESIS_TIME_MAIN,
+    NAME,
+    SLOT_SECONDS,
+    SUBUNIT,
+    TICKER,
+)
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.queries import Queries, norm_handle
 
@@ -88,6 +96,7 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
             "subunit": SUBUNIT,
             "name": NAME,
             "slot_seconds": SLOT_SECONDS,
+            "block_time_seconds": BLOCK_TIME_SECONDS,
             "genesis_hash_main": GENESIS_HASH_MAIN,
             "genesis_time_main": GENESIS_TIME_MAIN,
             "rpc_port": rpc.rpc_port,
@@ -103,6 +112,23 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
         except Exception as e:
             extra["live_error"] = str(e)
         return queries.status(indexer.status, rpc_ok, rpc.last_error, extra)
+
+    @app.get("/api/tip")
+    def tip():
+        """Cheap chain-tip probe for live UI. No extra RPC; indexer already tracks tip."""
+        st = indexer.status
+        height = st.get("tip")
+        if height is None:
+            height = queries.db.indexed_height()
+        return {
+            "height": height,
+            "indexed_height": queries.db.indexed_height(),
+            "hash": queries.db.get_meta("best_hash") or "",
+            "indexing": bool(st.get("indexing")),
+            "rpc_connected": bool(rpc.connected),
+            "slot_seconds": SLOT_SECONDS,
+            "block_time_seconds": BLOCK_TIME_SECONDS,
+        }
 
     @app.get("/api/search")
     def search(q: str = ""):

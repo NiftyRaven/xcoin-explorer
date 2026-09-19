@@ -17,6 +17,9 @@ INITIAL_SUBSIDY = 5000 * COIN
 HALVING_INTERVAL_MAIN = 2_100_000
 HALVING_INTERVAL_REGTEST = 150
 SLOT_SECONDS = 60
+# Target inter-block time equals the lottery slot (SLOT_SECONDS).
+# Documents chain cadence for explorer polling — not a consensus change.
+BLOCK_TIME_SECONDS = SLOT_SECONDS
 MAX_MONEY = 21_000_000_000 * COIN
 
 PUBKEY_ADDRESS_MAIN = 76  # X…
@@ -126,6 +129,29 @@ def slot_from_time(unix_time: int) -> int:
     if unix_time < 0:
         return 0
     return unix_time // SLOT_SECONDS
+
+
+def block_poll_delay(
+    *,
+    indexing: bool,
+    now: float,
+    poll_seconds: float = BLOCK_TIME_SECONDS,
+    tip_time: int | None = None,
+) -> float:
+    """Seconds to wait before the next indexer poll.
+
+    Catch-up does not sleep. Once synced, wait until the next expected
+    block using the tip timestamp, or the unix slot boundary (~60s).
+    """
+    if indexing:
+        return 0.0
+    spacing = float(poll_seconds) if poll_seconds and poll_seconds > 0 else float(BLOCK_TIME_SECONDS)
+    if tip_time and tip_time > 0:
+        remaining = (float(tip_time) + spacing) - now
+        if 0 < remaining <= spacing:
+            return remaining
+    remaining = spacing - (now % spacing)
+    return remaining if remaining > 0 else spacing
 
 
 def slot_from_height(height: int, genesis_time: int = GENESIS_TIME_MAIN) -> int:

@@ -71,6 +71,12 @@ a payday. Lottery winners start at height **1**.
 [ X Coin Wallet.exe  or  xcoind ]  --RPC 127.0.0.1:38442-->  [ this explorer ]  -->  browser :8080
 ```
 
+The indexer and live UI poll about **once per block** (~60s,
+`BLOCK_TIME_SECONDS` / `poll_seconds` in `explorer.toml`). Catch-up
+does not sleep. The browser checks `/api/tip` on that cadence and
+re-renders only when the tip hash or height changes. The one-second
+lottery countdown is a clock only — it does not refetch.
+
 Use **either** the GUI wallet **or** `xcoind`, not both. They share one
 data directory.
 
