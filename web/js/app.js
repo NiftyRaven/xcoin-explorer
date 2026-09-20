@@ -82,6 +82,10 @@ function pinataViewUrl(cid) {
   return "https://" + PINATA_VIEW_GATEWAY + "/ipfs/" + cid;
 }
 
+function ipfsContentUrl(cid) {
+  return "/api/ipfs/content/" + encodeURIComponent(cid);
+}
+
 function defaultGateways(cid) {
   return [
     pinataViewUrl(cid),
@@ -102,7 +106,7 @@ function ipfsSources(cid, extra) {
     out.push(u);
   };
   add(pinataViewUrl(cid));
-  add("/api/ipfs/content/" + encodeURIComponent(cid));
+  add(ipfsContentUrl(cid));
   (extra || []).forEach(add);
   defaultGateways(cid).forEach(add);
   return out;
@@ -117,15 +121,13 @@ function explorerAssetCid(a) {
 function assetListIpfsCell(a) {
   const cid = explorerAssetCid(a);
   if (!cid) return '<span class="faint">—</span>';
-  const src = pinataViewUrl(cid);
+  const srcs = ipfsSources(cid);
+  const name = a && a.name ? String(a.name) : "";
+  const href = name ? "#/asset/" + encodeURIComponent(name) : ipfsContentUrl(cid);
   return (
-    '<a class="asset-ipfs" href="' +
-    src +
-    '" target="_blank" rel="noreferrer">' +
-    '<img class="asset-thumb" src="' +
-    src +
-    '" alt="" />' +
-    '<span class="badge ipfs">IPFS</span></a>'
+    `<a class="asset-ipfs" href="${esc(href)}">` +
+    `<img class="asset-thumb" src="${esc(srcs[0])}" alt=""${fallbackAttr(srcs)} />` +
+    `<span class="badge ipfs">IPFS</span></a>`
   );
 }
 
@@ -233,28 +235,27 @@ document.addEventListener("keydown", (e) => {
 
 document.addEventListener("error", (e) => {
   const el = e.target;
-  if (!el || !el.closest || !el.closest("#asset-media")) return;
-  if (el.tagName !== "IMG" && el.tagName !== "VIDEO") return;
-  let extras = [];
-  try { extras = JSON.parse(el.dataset.fallbacks || "[]"); } catch { extras = []; }
-  if (extras.length) {
-    const next = extras.shift();
-    el.dataset.fallbacks = JSON.stringify(extras);
-    el.src = next;
-    if (el.hasAttribute("data-lightbox")) el.setAttribute("data-lightbox", next);
+  if (!el || (el.tagName !== "IMG" && el.tagName !== "VIDEO" && el.tagName !== "AUDIO")) return;
+  if (advanceIfPossible(el)) {
+    e.stopImmediatePropagation();
+    if (el.hasAttribute("data-lightbox")) el.setAttribute("data-lightbox", el.src);
     return;
   }
+  if (el.classList && el.classList.contains("asset-thumb")) {
+    el.hidden = true;
+    return;
+  }
+  const stage = el.closest && el.closest("#asset-media");
+  if (!stage) return;
   if (el.tagName === "IMG" && !el.dataset.triedVideo) {
     const cid = el.getAttribute("alt") || "";
     const urls = ipfsSources(normalizeIpfsClient(cid) || cid);
     if (urls.length && normalizeIpfsClient(cid)) {
-      const stage = el.closest("#asset-media");
       stage.innerHTML = `<div class="media-stage video"><video controls playsinline src="${esc(urls[0])}"${fallbackAttr(urls)}></video></div>`;
       return;
     }
   }
-  const stage = el.closest("#asset-media");
-  if (stage && !stage.querySelector(".media-empty")) {
+  if (!stage.querySelector(".media-empty")) {
     stage.innerHTML = `<div class="media-stage">${ipfsUnavailable("Could not render this IPFS object. Use a gateway link below.")}</div>`;
   }
 }, true);
@@ -845,11 +846,12 @@ function renderMediaStage(info, cid) {
       </figure>`;
   }
   if (info.kind === "audio" || audio) {
-    const src = info.kind === "audio" ? (ipfsSources(cid)[0] || info.url) : audio;
+    const srcs = info.kind === "audio" ? ipfsSources(cid, info.gateways) : mediaFallbacks(nft.audio, info.gateways);
+    const src = srcs[0] || (info.kind === "audio" ? info.url : audio);
     return `
       <div class="media-stage">
         <div class="media-empty">
-          <audio controls src="${esc(src)}"></audio>
+          <audio controls src="${esc(src)}"${fallbackAttr(srcs)}></audio>
         </div>
       </div>`;
   }
