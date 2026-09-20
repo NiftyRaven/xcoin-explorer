@@ -37,6 +37,10 @@ def test_health_and_home(tmp_path: Path):
     assert "no XVA1" in text
     assert "linkAddr(w." not in text
     assert "loadAssetMedia" in text
+    assert "xfer.mypinata.cloud" in text
+    assert "pinataViewUrl" in text
+    assert "assetListIpfsCell" in text
+    assert "PINATA_JWT" not in text
     assert "formatAssetAmount" in text
     assert "pageAsset" in text
     assert "pageMembers" in text
@@ -87,6 +91,38 @@ def test_health_and_home(tmp_path: Path):
         assert "No wallet found" in blob
         assert "wallet_release" in blob or "1.0.16-light" in blob or r"(\d+(?:\.\d+){1,3})" in blob
     db.close()
+
+
+def test_public_tree_is_view_only_no_pinata_secrets():
+    """This repo is public. Pinata JWT / pin APIs belong on x-coin-web, not here."""
+    root = Path(__file__).resolve().parent.parent
+    forbidden = (
+        "PINATA_JWT",
+        "PINATA_API_KEY",
+        "PINATA_SECRET",
+        "api.pinata.cloud/pinning",
+        "/api/ipfs/pin",
+    )
+    suffixes = {".py", ".js", ".css", ".html", ".toml", ".md", ".txt", ".example"}
+    for rel in ("explorer", "web", "config", "docs"):
+        base = root / rel
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in suffixes:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                assert token not in text, f"{path.relative_to(root)} contains {token}"
+    api = (root / "explorer" / "api.py").read_text(encoding="utf-8")
+    assert "@app.post" not in api
+    assert "@app.put" not in api
+    assert "@app.patch" not in api
+    js = (root / "web" / "js" / "app.js").read_text(encoding="utf-8")
+    py = (root / "explorer" / "ipfs.py").read_text(encoding="utf-8")
+    assert 'PINATA_VIEW_GATEWAY = "xfer.mypinata.cloud"' in js
+    assert 'DEDICATED_GATEWAY = "https://xfer.mypinata.cloud/ipfs/"' in py
+    assert py.index("DEDICATED_GATEWAY") < py.index("https://gateway.pinata.cloud/ipfs/")
 
 
 class _FakeWallet:

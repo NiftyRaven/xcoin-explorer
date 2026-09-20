@@ -14,12 +14,15 @@ CID_RE = re.compile(
     r"^(Qm[1-9A-HJ-NP-Za-km-z]{44}|baf[a-z2-7]{50,})$"
 )
 
+DEDICATED_GATEWAY = "https://xfer.mypinata.cloud/ipfs/"
+
 GATEWAYS = (
-    "https://ipfs.io/ipfs/",
+    DEDICATED_GATEWAY,
+    "https://gateway.pinata.cloud/ipfs/",
     "https://dweb.link/ipfs/",
     "https://w3s.link/ipfs/",
     "https://cloudflare-ipfs.com/ipfs/",
-    "https://gateway.pinata.cloud/ipfs/",
+    "https://ipfs.io/ipfs/",
 )
 
 MAX_INSPECT_BYTES = 2 * 1024 * 1024
@@ -58,6 +61,10 @@ def valid_cid(cid: str) -> bool:
 
 def gateway_urls(cid: str) -> list[str]:
     return [g + cid for g in GATEWAYS]
+
+
+def pinata_view_url(cid: str) -> str:
+    return f"{DEDICATED_GATEWAY}{cid}"
 
 
 def attach_ipfs_fields(asset: dict, rpc_data: dict | None = None) -> dict:
@@ -123,7 +130,7 @@ def _media_ref(value: Any) -> dict[str, str] | None:
         return {"kind": "url", "src": s, "cid": normalize_ipfs(s)}
     cid = normalize_ipfs(s)
     if cid:
-        return {"kind": "ipfs", "src": f"/api/ipfs/content/{cid}", "cid": cid}
+        return {"kind": "ipfs", "src": pinata_view_url(cid), "cid": cid}
     return None
 
 
@@ -210,7 +217,7 @@ def inspect_cid(cid: str) -> dict[str, Any]:
         "size": len(raw),
         "truncated": truncated,
         "source": source,
-        "url": f"/api/ipfs/content/{cid}",
+        "url": pinata_view_url(cid),
         "gateways": gateway_urls(cid),
     }
     if kind == "json" and not truncated:

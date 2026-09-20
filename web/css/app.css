@@ -152,6 +152,15 @@ tr:hover td { background: rgba(255,255,255,0.015); }
 
 .crumb { color: var(--faint); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 8px; }
 .badge.ipfs { color: #c4b5fd; border-color: #4c3d7a; background: rgba(139, 92, 246, 0.12); }
+.asset-ipfs { display: inline-flex; align-items: center; text-decoration: none; }
+.asset-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  vertical-align: middle;
+  margin-right: 8px;
+}
 .click-rows tr[data-href] { cursor: pointer; }
 
 .asset-hero {
