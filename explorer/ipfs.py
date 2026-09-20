@@ -25,6 +25,14 @@ GATEWAYS = (
     "https://ipfs.io/ipfs/",
 )
 
+# Dedicated Pinata returns this for CIDs never pinned to the xfer account.
+# Those CIDs are still valid IPFS; try the next gateway / content proxy.
+GATEWAY_MISS_MARKERS = (
+    b"ERR_ID:00006",
+    b"does not have this content pinned",
+    b"the owner of this gateway does not have this content",
+)
+
 MAX_INSPECT_BYTES = 2 * 1024 * 1024
 MAX_PEEK_BYTES = 64 * 1024
 MAX_CONTENT_BYTES = 80 * 1024 * 1024
@@ -65,6 +73,21 @@ def gateway_urls(cid: str) -> list[str]:
 
 def pinata_view_url(cid: str) -> str:
     return f"{DEDICATED_GATEWAY}{cid}"
+
+
+def ipfs_content_url(cid: str) -> str:
+    return f"/api/ipfs/content/{cid}"
+
+
+def _is_gateway_miss(content_type: str, raw: bytes) -> bool:
+    """True when a gateway answered without the CID bytes (Pinata owner-not-pinned HTML/text)."""
+    head = (raw or b"")[:8192].lower()
+    if any(marker.lower() in head for marker in GATEWAY_MISS_MARKERS):
+        return True
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct in ("text/html", "text/plain") and b"err_id:" in head:
+        return True
+    return False
 
 
 def attach_ipfs_fields(asset: dict, rpc_data: dict | None = None) -> dict:
@@ -130,7 +153,7 @@ def _media_ref(value: Any) -> dict[str, str] | None:
         return {"kind": "url", "src": s, "cid": normalize_ipfs(s)}
     cid = normalize_ipfs(s)
     if cid:
-        return {"kind": "ipfs", "src": pinata_view_url(cid), "cid": cid}
+        return {"kind": "ipfs", "src": ipfs_content_url(cid), "cid": cid}
     return None
 
 
@@ -181,10 +204,15 @@ def _fetch(cid: str, limit: int, peek: bool = False) -> tuple[bytes, str, str, b
                     chunks: list[bytes] = []
                     total = 0
                     truncated = False
+                    missed = False
                     for chunk in resp.iter_bytes():
                         total += len(chunk)
                         chunks.append(chunk)
                         raw = b"".join(chunks)
+                        if _is_gateway_miss(ct, raw):
+                            last_err = f"unpinned/miss from {base}"
+                            missed = True
+                            break
                         if peek:
                             kind, _sniffed = _sniff_kind(ct, raw[:MAX_PEEK_BYTES])
                             if kind in ("image", "video", "audio") and total >= min(4096, MAX_PEEK_BYTES):
@@ -197,6 +225,8 @@ def _fetch(cid: str, limit: int, peek: bool = False) -> tuple[bytes, str, str, b
                                 return raw[:MAX_PEEK_BYTES], ct, url, truncated
                         elif total > limit:
                             raise ValueError("IPFS object exceeds explorer size limit")
+                    if missed:
+                        continue
                     return b"".join(chunks), ct, url, False
         except httpx.HTTPError as e:
             last_err = str(e)
@@ -217,7 +247,7 @@ def inspect_cid(cid: str) -> dict[str, Any]:
         "size": len(raw),
         "truncated": truncated,
         "source": source,
-        "url": pinata_view_url(cid),
+        "url": ipfs_content_url(cid),
         "gateways": gateway_urls(cid),
     }
     if kind == "json" and not truncated:

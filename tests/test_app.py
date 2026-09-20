@@ -39,8 +39,17 @@ def test_health_and_home(tmp_path: Path):
     assert "loadAssetMedia" in text
     assert "xfer.mypinata.cloud" in text
     assert "pinataViewUrl" in text
+    assert "ipfsContentUrl" in text
     assert "assetListIpfsCell" in text
     assert "PINATA_JWT" not in text
+    assert text.index("add(pinataViewUrl(cid));") < text.index("add(ipfsContentUrl(cid));")
+    cell = text[text.index("function assetListIpfsCell") : text.index("function mediaSrc")]
+    assert "#/asset/" in cell
+    assert "ipfsSources(cid)" in cell
+    assert "fallbackAttr" in cell
+    assert "target=\"_blank\"" not in cell
+    assert "pinataViewUrl" not in cell
+    assert "?v=ipfs-viewer-1" in home.text
     assert "formatAssetAmount" in text
     assert "pageAsset" in text
     assert "pageMembers" in text
@@ -123,6 +132,10 @@ def test_public_tree_is_view_only_no_pinata_secrets():
     assert 'PINATA_VIEW_GATEWAY = "xfer.mypinata.cloud"' in js
     assert 'DEDICATED_GATEWAY = "https://xfer.mypinata.cloud/ipfs/"' in py
     assert py.index("DEDICATED_GATEWAY") < py.index("https://gateway.pinata.cloud/ipfs/")
+    assert "ipfs_content_url" in py
+    assert "@app.get(\"/api/ipfs/inspect\")" in api
+    assert "@app.get(\"/api/ipfs/content/{cid}\")" in api
+    assert "ERR_ID:00006" in py
 
 
 class _FakeWallet:
