@@ -37,6 +37,10 @@ def test_health_and_home(tmp_path: Path):
     assert "no XVA1" in text
     assert "linkAddr(w." not in text
     assert "loadAssetMedia" in text
+    assert "xfer.mypinata.cloud" in text
+    assert "pinataViewUrl" in text
+    assert "assetListIpfsCell" in text
+    assert "PINATA_JWT" not in text
     assert "formatAssetAmount" in text
     assert "pageAsset" in text
     assert "pageMembers" in text

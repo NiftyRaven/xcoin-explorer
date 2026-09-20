@@ -76,8 +76,15 @@ function assetCid(a) {
     || "";
 }
 
+const PINATA_VIEW_GATEWAY = "xfer.mypinata.cloud";
+
+function pinataViewUrl(cid) {
+  return "https://" + PINATA_VIEW_GATEWAY + "/ipfs/" + cid;
+}
+
 function defaultGateways(cid) {
   return [
+    pinataViewUrl(cid),
     "https://gateway.pinata.cloud/ipfs/" + cid,
     "https://dweb.link/ipfs/" + cid,
     "https://w3s.link/ipfs/" + cid,
@@ -94,10 +101,32 @@ function ipfsSources(cid, extra) {
     seen.add(u);
     out.push(u);
   };
+  add(pinataViewUrl(cid));
   add("/api/ipfs/content/" + encodeURIComponent(cid));
   (extra || []).forEach(add);
   defaultGateways(cid).forEach(add);
   return out;
+}
+
+function explorerAssetCid(a) {
+  if (typeof assetCid === "function") return assetCid(a);
+  if (!a) return "";
+  return a.ipfs_cid || a.ipfs || (a.rpc && (a.rpc.ipfs_hash || a.rpc.ipfs)) || "";
+}
+
+function assetListIpfsCell(a) {
+  const cid = explorerAssetCid(a);
+  if (!cid) return '<span class="faint">—</span>';
+  const src = pinataViewUrl(cid);
+  return (
+    '<a class="asset-ipfs" href="' +
+    src +
+    '" target="_blank" rel="noreferrer">' +
+    '<img class="asset-thumb" src="' +
+    src +
+    '" alt="" />' +
+    '<span class="badge ipfs">IPFS</span></a>'
+  );
 }
 
 function mediaSrc(ref) {
@@ -750,7 +779,7 @@ async function pageAssets() {
             <td>${linkAsset(a.name)}</td>
             <td><span class="badge asset">${esc(a.kind || "")}</span></td>
             <td>${formatAssetAmount(a.amount, a.name, a.units)}</td>
-            <td>${a.has_ipfs || a.ipfs_cid || a.ipfs ? `<span class="badge ipfs">IPFS</span>` : `<span class="faint">—</span>`}</td>
+            <td>${assetListIpfsCell(a)}</td>
             <td>${a.x_handle ? handle(a.x_handle) : "—"}</td>
             <td>${a.created_height != null ? linkBlock(a.created_height) : "—"}</td>
           </tr>`).join("") || `<tr><td colspan="6" class="empty">No assets yet.</td></tr>`}
