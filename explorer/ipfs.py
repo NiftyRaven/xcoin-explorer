@@ -159,7 +159,8 @@ def _media_ref(value: Any) -> dict[str, str] | None:
 
 def extract_nft_media(meta: dict) -> dict[str, Any]:
     image = None
-    for key in ("image", "image_url", "imageUrl", "img", "thumbnail", "preview"):
+    # xcoin-asset-1: image_url first (same as Launch / PR #60), then icon / image.
+    for key in ("image_url", "icon", "image", "img", "imageUrl", "thumbnail", "preview"):
         image = _media_ref(meta.get(key))
         if image:
             break
