@@ -188,13 +188,12 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
 
     @app.get("/api/ipfs/inspect")
     def ipfs_inspect(cid: str = ""):
-        headers = {"Cache-Control": "no-store"}
         try:
-            return JSONResponse(inspect_cid(cid), headers=headers)
+            return JSONResponse(inspect_cid(cid), headers={"Cache-Control": "public, max-age=300"})
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400, headers=headers)
+            return JSONResponse({"error": str(e)}, status_code=400, headers={"Cache-Control": "no-store"})
         except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=502, headers=headers)
+            return JSONResponse({"error": str(e)}, status_code=502, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/ipfs/content/{cid}")
     def ipfs_content(cid: str):

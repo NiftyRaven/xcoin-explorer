@@ -1,5 +1,8 @@
+import json
 from pathlib import Path
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from explorer.api import create_app
@@ -10,13 +13,17 @@ from explorer.decode import b58encode, ipfs_bytes_to_cid, normalize_ipfs, parse_
 from explorer.indexer import Indexer
 from explorer.ipfs import (
     GATEWAYS,
+    JSON_FETCH_TIMEOUT,
+    JSON_MAX_BYTES,
     _is_gateway_miss,
     attach_ipfs_fields,
+    clear_metadata_cache,
     extract_nft_media,
     fetch_content,
     inspect_cid,
     ipfs_content_url,
     pinata_view_url,
+    safe_http_url,
     valid_cid,
 )
 from explorer.queries import Queries
@@ -227,6 +234,156 @@ def test_inspect_falls_through_when_dedicated_refuses(monkeypatch):
     assert out["url"] == ipfs_content_url(cid)
     assert out["source"].startswith("https://gateway.pinata.cloud/ipfs/")
     assert out["gateways"][0] == pinata_view_url(cid)
+
+
+def test_valid_cid_accepts_v0_46_and_v1_only():
+    cid0 = "Qm" + "1" * 44
+    assert len(cid0) == 46
+    assert valid_cid(cid0)
+    assert not valid_cid("Qm" + "1" * 43)
+    assert not valid_cid("Qm" + "1" * 45)
+    assert not valid_cid("Qm" + "0" * 44)
+    cid1 = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    assert valid_cid(cid1)
+    assert not valid_cid("javascript:alert(1)")
+    assert not valid_cid("")
+
+
+def test_safe_http_url_allows_http_only():
+    assert safe_http_url("https://xferchain.net/a") == "https://xferchain.net/a"
+    assert safe_http_url("http://example.com") == "http://example.com"
+    assert safe_http_url("javascript:alert(1)") == ""
+    assert safe_http_url("https://user:secret@example.com/a") == ""
+    assert safe_http_url("<a href='https://example.com'>x</a>") == ""
+
+
+def test_extract_nft_media_strips_html_and_keeps_http_link():
+    raw, cid = _cid0(b"\x12" * 32)
+    nft = extract_nft_media(
+        {
+            "name": "<b>Hi</b>",
+            "description": "<script>alert(1)</script>Hello",
+            "image": "ipfs://" + cid,
+            "external_url": "javascript:alert(1)",
+            "website_url": "https://example.com/token",
+            "attributes": [{"trait_type": "<i>Color</i>", "value": 3}],
+            "contract_address": "nope",
+        }
+    )
+    assert nft["name"] == "Hi"
+    assert "<" not in nft["description"]
+    assert "Hello" in nft["description"]
+    assert nft["external_url"] == "https://example.com/token"
+    assert nft["image"]["cid"] == cid
+    assert nft["attributes"] == [{"trait_type": "Color", "value": "3"}]
+
+
+def test_inspect_json_metadata_is_plain_cached_and_capped(monkeypatch):
+    clear_metadata_cache()
+    _, cid = _cid0(b"\x81" * 32)
+    _, image = _cid0(b"\x82" * 32)
+    body = json.dumps(
+        {
+            "name": "<b>Gold X</b>",
+            "description": "No mining.\n<script>alert(1)</script>One minute.",
+            "image_url": image,
+            "external_url": "https://xferchain.net/x",
+            "attributes": [{"trait_type": "Color", "value": "Gold"}],
+            "contract_address": "do-not-show",
+        }
+    ).encode()
+    calls = {"n": 0}
+
+    def fake_fetch(c, limit, peek=False):
+        calls["n"] += 1
+        assert c == cid
+        assert peek is True
+        assert limit == JSON_MAX_BYTES
+        assert limit == 256 * 1024
+        return body, "application/json", pinata_view_url(c), False
+
+    monkeypatch.setattr("explorer.ipfs._fetch", fake_fetch)
+    out = inspect_cid(cid)
+    again = inspect_cid(cid)
+    assert calls["n"] == 1
+    assert again["view"]["name"] == out["view"]["name"] == "Gold X"
+    assert "<" not in out["view"]["description"]
+    assert "One minute." in out["view"]["description"]
+    assert out["view"]["image"]["cid"] == image
+    assert out["view"]["image"]["src"] == ipfs_content_url(image)
+    assert out["view"]["external_url"] == "https://xferchain.net/x"
+    assert out["view"]["attributes"][0] == {"trait_type": "Color", "value": "Gold"}
+    assert "<b>" in out["raw_json"]
+    assert "contract" not in out["raw_json"]
+    clear_metadata_cache()
+
+
+def test_inspect_oversize_json_degrades_quietly(monkeypatch):
+    clear_metadata_cache()
+    _, cid = _cid0(b"\x83" * 32)
+    blob = b'{"name":"too-big"}' + b" " * (300 * 1024)
+    _patch_gateways(
+        monkeypatch,
+        [("https://xfer.mypinata.cloud/", (200, "application/json", blob))],
+    )
+    out = inspect_cid(cid)
+    assert out["kind"] == "json"
+    assert out["truncated"] is True
+    assert "view" not in out
+    assert "metadata" not in out
+    clear_metadata_cache()
+
+
+def test_invalid_cid_is_rejected_before_fetch(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("should not fetch")
+
+    monkeypatch.setattr("explorer.ipfs.httpx.Client", boom)
+    with pytest.raises(ValueError, match="invalid IPFS CID"):
+        inspect_cid("nope")
+    with pytest.raises(ValueError, match="invalid IPFS CID"):
+        inspect_cid("Qm" + "1" * 10)
+
+
+def test_inspect_timeout_does_not_hang(monkeypatch):
+    clear_metadata_cache()
+    _, cid = _cid0(b"\x84" * 32)
+
+    class _TimeoutClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def stream(self, _method, _url):
+            raise httpx.TimeoutException("timed out")
+
+    def factory(*_args, **kwargs):
+        assert kwargs.get("timeout") == JSON_FETCH_TIMEOUT
+        return _TimeoutClient()
+
+    monkeypatch.setattr("explorer.ipfs.httpx.Client", factory)
+    with pytest.raises(ValueError, match="IPFS fetch failed"):
+        inspect_cid(cid)
+
+
+def test_explorer_ui_clips_ids_and_renders_metadata_safely():
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "web" / "css" / "app.css").read_text(encoding="utf-8")
+    js = (root / "web" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "overflow-wrap: anywhere" in css
+    assert ".gw-chip" in css
+    assert "white-space: nowrap" in css
+    assert "gatewayChipsHtml" in js
+    assert "Cloudflare" in js
+    assert 'class="copy-btn"' in js
+    assert "mono-clip" in js
+    assert "renderMetadataCard" in js
+    assert "noopener noreferrer" in js
+    assert "Raw JSON" in js
+    assert "esc(raw)" in js
+    assert "esc(description)" in js
 
 
 def test_asset_api_includes_ipfs_and_rejects_bad_cid(tmp_path: Path):

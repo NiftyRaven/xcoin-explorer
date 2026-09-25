@@ -30,6 +30,46 @@ function shortHash(h, n = 10) {
   return h.length <= n * 2 + 1 ? h : `${h.slice(0, n)}…${h.slice(-n)}`;
 }
 
+function clipMiddle(value, left = 10, right = 8) {
+  const s = value == null ? "" : String(value);
+  if (s.length <= left + right + 1) return s;
+  return s.slice(0, left) + "…" + s.slice(-right);
+}
+
+function copyButton(text) {
+  const full = text == null ? "" : String(text);
+  if (!full) return "";
+  return `<button type="button" class="copy-btn" data-copy="${esc(full)}">Copy</button>`;
+}
+
+function idHtml(text, opts = {}) {
+  const full = text == null ? "" : String(text);
+  if (!full) return `<span class="faint">—</span>`;
+  const shown = clipMiddle(full, opts.left || 10, opts.right || 8);
+  const inner = opts.href
+    ? `<a class="mono-clip" href="${esc(opts.href)}" title="${esc(full)}">${esc(shown)}</a>`
+    : `<span class="mono-clip" title="${esc(full)}">${esc(shown)}</span>`;
+  return `<span class="id-line">${inner}${copyButton(full)}</span>`;
+}
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve) => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch { /* ignore */ }
+    ta.remove();
+    resolve();
+  });
+}
+
 function atomsToXfer(atoms) {
   const n = Number(atoms || 0);
   const sign = n < 0 ? "-" : "";
@@ -126,19 +166,46 @@ function assetListIpfsCell(a) {
   const href = name ? "#/asset/" + encodeURIComponent(name) : ipfsContentUrl(cid);
   return (
     `<a class="asset-ipfs" href="${esc(href)}">` +
-    `<img class="asset-thumb" src="${esc(srcs[0])}" alt=""${fallbackAttr(srcs)} />` +
+    `<img class="asset-thumb" src="${esc(srcs[0])}" alt="" data-ipfs-json="${esc(cid)}"${fallbackAttr(srcs)} />` +
     `<span class="badge ipfs">IPFS</span></a>`
   );
+}
+
+async function resolveThumb(img, cid) {
+  try {
+    const info = await api("/ipfs/inspect?cid=" + encodeURIComponent(cid));
+    const media = mediaCidFromInfo(info, cid);
+    if (!media || media === cid) {
+      img.hidden = true;
+      return;
+    }
+    const urls = ipfsSources(media);
+    img.hidden = false;
+    img.dataset.fallbacks = JSON.stringify(urls.slice(1));
+    img.src = urls[0];
+  } catch {
+    img.hidden = true;
+  }
+}
+
+function mediaCidFromInfo(info, jsonCid) {
+  if (!info) return "";
+  if (info.kind === "image") return jsonCid || info.cid || "";
+  const viewCid = info.view && info.view.image && info.view.image.cid;
+  if (viewCid) return viewCid;
+  const nftCid = info.nft && info.nft.image && info.nft.image.cid;
+  return nftCid || "";
 }
 
 function mediaSrc(ref) {
   if (!ref) return "";
   if (typeof ref === "object") {
     if (ref.cid) return ipfsSources(ref.cid)[0];
-    if (ref.src) return ref.src;
-    return "";
+    const src = ref.src || "";
+    if (src.startsWith("/api/ipfs/")) return src;
+    return safeHttpClient(src);
   }
-  if (/^https?:\/\//i.test(ref)) return ref;
+  if (/^https?:\/\//i.test(ref)) return safeHttpClient(ref);
   const cid = normalizeIpfsClient(ref);
   return cid ? ipfsSources(cid)[0] : "";
 }
@@ -173,14 +240,19 @@ function fmtTime(ts) {
 }
 
 function linkBlock(h) { return `<a href="#/block/${h}">${h}</a>`; }
-function linkTx(id) { return `<a class="hash" href="#/tx/${id}">${shortHash(id)}</a>`; }
+function linkTx(id) {
+  if (!id) return `<span class="faint">—</span>`;
+  return idHtml(id, { href: "#/tx/" + encodeURIComponent(id) });
+}
 function linkAddr(a) {
   if (!a) return `<span class="faint">—</span>`;
-  return `<a class="hash" href="#/address/${encodeURIComponent(a)}">${shortHash(a, 8)}</a>`;
+  return idHtml(a, { href: "#/address/" + encodeURIComponent(a), left: 8, right: 6 });
 }
 function linkAsset(n) {
   if (!n) return "—";
-  return `<a href="#/asset/${encodeURIComponent(n)}">${esc(n)}</a>`;
+  const full = String(n);
+  const shown = full.length > 28 ? clipMiddle(full, 16, 8) : full;
+  return `<span class="id-line"><a class="break-anywhere" href="#/asset/${encodeURIComponent(full)}" title="${esc(full)}">${esc(shown)}</a>${copyButton(full)}</span>`;
 }
 function handle(h) {
   if (!h) return "";
@@ -204,15 +276,29 @@ function setNav() {
 }
 
 function copyable(text) {
-  return `<code class="copy" title="Copy" data-copy="${esc(text)}">${esc(text)}</code>`;
+  return idHtml(text);
 }
 
 document.addEventListener("click", (e) => {
-  const el = e.target.closest("[data-copy]");
+  const el = e.target.closest("[data-copy], [data-copy-from]");
   if (el) {
-    navigator.clipboard.writeText(el.dataset.copy).catch(() => {});
-    el.classList.add("ok");
-    setTimeout(() => el.classList.remove("ok"), 600);
+    e.preventDefault();
+    e.stopPropagation();
+    let text = el.dataset.copy || "";
+    const from = el.getAttribute("data-copy-from");
+    if (from) {
+      const node = document.getElementById(from);
+      text = node ? node.textContent || "" : "";
+    }
+    copyText(text).then(() => {
+      const prev = el.textContent;
+      el.textContent = "Copied";
+      el.classList.add("ok");
+      setTimeout(() => {
+        el.textContent = prev === "Copied" ? "Copy" : prev;
+        el.classList.remove("ok");
+      }, 900);
+    }).catch(() => {});
     return;
   }
   const shot = e.target.closest("[data-lightbox]");
@@ -242,6 +328,12 @@ document.addEventListener("error", (e) => {
     return;
   }
   if (el.classList && el.classList.contains("asset-thumb")) {
+    const cid = el.getAttribute("data-ipfs-json") || "";
+    if (cid && !el.dataset.metaTried) {
+      el.dataset.metaTried = "1";
+      resolveThumb(el, cid);
+      return;
+    }
     el.hidden = true;
     return;
   }
@@ -256,7 +348,7 @@ document.addEventListener("error", (e) => {
     }
   }
   if (!stage.querySelector(".media-empty")) {
-    stage.innerHTML = `<div class="media-stage">${ipfsUnavailable("Could not render this IPFS object. Use a gateway link below.")}</div>`;
+    stage.innerHTML = `<div class="media-stage">${ipfsUnavailable("This file did not load. Try a link below.")}</div>`;
   }
 }, true);
 
@@ -645,12 +737,12 @@ async function pageBlocks() {
         <tbody>
           ${(data.items || []).map((b) => `<tr>
             <td>${linkBlock(b.height)}</td>
-            <td class="hash"><a class="hash" href="#/block/${b.hash}">${shortHash(b.hash)}</a></td>
+            <td>${idHtml(b.hash, { href: "#/block/" + encodeURIComponent(b.hash) })}</td>
             <td class="muted">${fmtTime(b.time)}</td>
             <td>${b.tx_count}</td>
             <td>${b.winner_count || (b.height === 0 ? "—" : "0")}</td>
             <td>${blockWinner(b)}</td>
-          </tr>`).join("")}
+          </tr>`).join("") || `<tr><td colspan="6" class="empty">No blocks yet.</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -663,11 +755,11 @@ async function pageBlock(key) {
     <h1 class="page-title">Block ${b.height}</h1>
     <div class="card" style="margin-bottom:16px">
       <div class="kv">
-        <b>Hash</b><div>${copyable(b.hash)}</div>
+        <b>Hash</b><div>${idHtml(b.hash, { href: "#/block/" + encodeURIComponent(b.hash) })}</div>
         <b>Time</b><div>${fmtTime(b.time)} · ${timeAgo(b.time)}</div>
-        <b>Previous</b><div>${b.prev ? `<a class="hash" href="#/block/${b.prev}">${b.prev}</a>` : "—"}</div>
+        <b>Previous</b><div>${b.prev ? idHtml(b.prev, { href: "#/block/" + encodeURIComponent(b.prev) }) : "—"}</div>
         <b>Slot</b><div>${b.lottery_slot ?? "—"}</div>
-        <b>Seed</b><div class="hash">${b.lottery_seed || "—"}</div>
+        <b>Seed</b><div>${b.lottery_seed ? idHtml(b.lottery_seed) : "—"}</div>
         <b>Subsidy</b><div>${atomsToXfer(b.subsidy)}</div>
         <b>Fees</b><div>${atomsToXfer(b.fees)}</div>
         <b>Size</b><div>${b.size} bytes · ${b.tx_count} tx</div>
@@ -692,7 +784,7 @@ async function pageBlock(key) {
             <td>${linkTx(t.txid)}</td>
             <td>${t.coinbase ? `<span class="badge lottery">coinbase</span>` : ""} ${t.identity ? `<span class="badge asset">identity @${esc(t.xid_handle)}</span>` : ""}</td>
             <td>${atomsToXfer(t.xfer_out)}</td>
-          </tr>`).join("")}
+          </tr>`).join("") || `<tr><td colspan="4" class="empty">No transactions in this block.</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -701,7 +793,7 @@ async function pageBlock(key) {
 async function pageTx(id) {
   const t = await api("/tx/" + encodeURIComponent(id));
   if (t.unindexed) {
-    app.innerHTML = `<h1 class="page-title">Transaction</h1><div class="card"><p>Seen via node RPC, not yet in the explorer index.</p><pre class="hash">${esc(JSON.stringify(t.rpc, null, 2))}</pre></div>`;
+    app.innerHTML = `<h1 class="page-title">Transaction</h1><div class="card"><p>This transaction is on the node, and not in the explorer index yet.</p><pre class="media-text break-anywhere">${esc(JSON.stringify(t.rpc, null, 2))}</pre></div>`;
     return;
   }
   const vin = (t.vin || []).map((v) => `<div>${v.coinbase ? `<span class="badge lottery">coinbase</span>` : linkAddr(v.address)}
@@ -714,7 +806,7 @@ async function pageTx(id) {
     <p class="sub">${copyable(t.txid)}</p>
     <div class="card" style="margin-bottom:16px">
       <div class="kv">
-        <b>Block</b><div>${t.height != null ? linkBlock(t.height) : "mempool"} ${t.block_hash ? `<span class="hash">${shortHash(t.block_hash)}</span>` : ""}</div>
+        <b>Block</b><div>${t.height != null ? linkBlock(t.height) : "mempool"} ${t.block_hash ? idHtml(t.block_hash, { href: "#/block/" + encodeURIComponent(t.block_hash) }) : ""}</div>
         <b>Time</b><div>${fmtTime(t.time)}</div>
         <b>Fee</b><div>${t.coinbase ? "—" : atomsToXfer(t.fee)}</div>
         <b>Identity</b><div>${txIdentityHtml(t)}</div>
@@ -789,25 +881,94 @@ async function pageAssets() {
     </div>`;
 }
 
-function gatewayLinks(cid, extra) {
-  const urls = (extra && extra.length ? extra : defaultGateways(cid)).filter((u) => /^https?:\/\//i.test(u));
-  return urls.map((u) => {
-    let host = u;
-    try { host = new URL(u).hostname; } catch { /* keep raw */ }
-    return `<a href="${esc(u)}" target="_blank" rel="noreferrer">${esc(host)}</a>`;
-  }).join(" · ");
+const GATEWAY_CHIPS = [
+  ["xfer.mypinata.cloud", "View"],
+  ["ipfs.io", "ipfs.io"],
+  ["dweb.link", "dweb"],
+  ["w3s.link", "w3s"],
+  ["cloudflare-ipfs.com", "Cloudflare"],
+  ["gateway.pinata.cloud", "Gateway"],
+];
+
+function gatewayChipsHtml(cid) {
+  const id = normalizeIpfsClient(cid);
+  if (!id) return "";
+  return `<span class="gw-row">${GATEWAY_CHIPS.map(([host, label]) => {
+    const href = "https://" + host + "/ipfs/" + id;
+    return `<a class="gw-chip" href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(host)}">${esc(label)}</a>`;
+  }).join("")}</span>`;
 }
 
-function renderNftAttributes(attrs) {
+function plainClient(value) {
+  return String(value ?? "").replace(/<[^>]*>/g, "");
+}
+
+function safeHttpClient(value) {
+  const t = plainClient(value).trim();
+  if (!/^https?:\/\//i.test(t)) return "";
+  try {
+    const u = new URL(t);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    if (u.username || u.password) return "";
+    return t;
+  } catch {
+    return "";
+  }
+}
+
+function kindLabel(kind) {
+  return {
+    image: "Picture",
+    video: "Video",
+    audio: "Audio",
+    json: "Token file",
+    text: "Text",
+  }[kind] || "File";
+}
+
+function captionHtml(cid, kind) {
+  const label = kind ? `<div class="muted">${esc(kindLabel(kind))}</div>` : `<div class="muted">File id</div>`;
+  return `${label}${idHtml(cid)}${gatewayChipsHtml(cid)}`;
+}
+
+function traitGrid(attrs) {
   if (!attrs || !attrs.length) return "";
   const cells = attrs.map((at) => {
-    if (at == null) return "";
-    if (typeof at !== "object") return `<div class="attr"><b>${esc(at)}</b></div>`;
-    const label = at.trait_type || at.traitType || at.type || at.name || "trait";
-    const value = at.value ?? at.val ?? "";
+    if (!at || typeof at !== "object") return "";
+    const label = plainClient(at.trait_type || at.trait || at.type || "");
+    const value = plainClient(at.value ?? "");
+    if (!label || !value) return "";
     return `<div class="attr"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
   }).join("");
-  return `<div class="card" style="margin-bottom:16px"><h2>Attributes</h2><div class="attr-grid">${cells}</div></div>`;
+  if (!cells) return "";
+  return `<div class="trait-label">Traits</div><div class="attr-grid">${cells}</div>`;
+}
+
+function renderMetadataCard(info) {
+  if (!info || info.kind !== "json") return "";
+  const view = info.view || {};
+  const nft = info.nft || {};
+  const name = plainClient(view.name || nft.name || "").trim();
+  const description = plainClient(view.description || nft.description || "").trim();
+  const external = safeHttpClient(view.external_url || nft.external_url || "");
+  const image = (view.image && typeof view.image === "object") ? view.image : (nft.image || null);
+  const attrs = (view.attributes && view.attributes.length) ? view.attributes : (nft.attributes || []);
+  const raw = info.raw_json || "";
+  const picture = image && image.cid
+    ? `<p class="muted">Picture ${idHtml(image.cid)}</p>`
+    : (image && safeHttpClient(image.src) ? `<p class="muted">Picture <a href="${esc(safeHttpClient(image.src))}" target="_blank" rel="noopener noreferrer">${esc(safeHttpClient(image.src))}</a></p>` : "");
+  const fields = [
+    name ? `<h3 class="nft-name">${esc(name)}</h3>` : "",
+    description ? `<p class="asset-desc">${esc(description)}</p>` : "",
+    external ? `<p><span class="muted">Website</span> <a href="${esc(external)}" target="_blank" rel="noopener noreferrer">${esc(external)}</a></p>` : "",
+    picture,
+    traitGrid(attrs),
+  ].join("");
+  const rawBlock = raw
+    ? `<details class="raw-json"><summary>Raw JSON</summary><div class="raw-json-tools"><button type="button" class="copy-btn" data-copy-from="raw-json-body">Copy</button></div><pre id="raw-json-body" class="media-text">${esc(raw)}</pre></details>`
+    : "";
+  if (!fields && !rawBlock) return "";
+  return `<div class="card metadata-card" style="margin-bottom:16px"><h2>Metadata</h2>${fields}${rawBlock}</div>`;
 }
 
 function ipfsUnavailable(message) {
@@ -820,11 +981,12 @@ function renderMediaStage(info, cid) {
       <div class="media-stage">
         <div class="media-empty">
           <span class="badge ipfs">IPFS</span>
-          <p>Resolving ${copyable(cid)}…</p>
+          <p>Loading…</p>
         </div>
       </div>`;
   }
   const nft = info.nft || {};
+  if (info.view && info.view.image && !nft.image) nft.image = info.view.image;
   const poster = mediaSrc(nft.image);
   const anim = mediaSrc(nft.animation);
   const audio = mediaSrc(nft.audio);
@@ -856,7 +1018,7 @@ function renderMediaStage(info, cid) {
       </div>`;
   }
   if (info.kind === "json") {
-    return `<div class="media-stage">${ipfsUnavailable("IPFS document has no image or video.")}</div>`;
+    return `<div class="media-stage">${ipfsUnavailable("No picture in this file.")}</div>`;
   }
   if (info.kind === "text") {
     return `<pre class="media-text">${esc(info.text || "")}</pre>`;
@@ -865,7 +1027,7 @@ function renderMediaStage(info, cid) {
     <div class="media-stage">
       <div class="media-empty">
         <span class="badge">${esc(info.content_type || "file")}</span>
-        <p><a href="${esc(info.url)}" target="_blank" rel="noreferrer">Open IPFS content</a></p>
+        <p><a href="${esc(info.url)}" target="_blank" rel="noopener noreferrer">Open this file</a></p>
       </div>
     </div>`;
 }
@@ -895,22 +1057,13 @@ async function loadAssetMedia(cid, gateways) {
       });
     }
     const cap = $("#asset-media-cap");
-    if (cap) {
-      cap.innerHTML = `${esc(info.kind)} · ${esc(info.content_type || "")} · ${gatewayLinks(cid, info.gateways || gateways)}`;
-    }
-    if (metaBox && info.nft) {
-      const nft = info.nft;
-      const desc = nft.description ? `<p class="asset-desc">${esc(nft.description)}</p>` : "";
-      const title = nft.name ? `<h3 class="nft-name">${esc(nft.name)}</h3>` : "";
-      const ext = nft.external_url ? `<p><a href="${esc(nft.external_url)}" target="_blank" rel="noreferrer">${esc(nft.external_url)}</a></p>` : "";
-      metaBox.innerHTML = (title || desc || ext || (nft.attributes || []).length)
-        ? `${title}${desc}${ext}${renderNftAttributes(nft.attributes)}`
-        : "";
-    }
+    if (cap) cap.innerHTML = captionHtml(cid, info.kind);
+    if (metaBox) metaBox.innerHTML = renderMetadataCard(info);
   } catch (e) {
     stage.innerHTML = showGatewayImage(cid, urls);
     const cap = $("#asset-media-cap");
-    if (cap) cap.innerHTML = `${gatewayLinks(cid, gateways || urls)}`;
+    if (cap) cap.innerHTML = captionHtml(cid, "");
+    if (metaBox) metaBox.innerHTML = "";
   }
 }
 
@@ -946,15 +1099,15 @@ async function pageAsset(name) {
           <div class="media-stage">
             <div class="media-empty">
               <span class="badge">no IPFS</span>
-              <p>This asset has no IPFS hash on chain.</p>
+              <p>This asset has no file attached.</p>
             </div>
           </div>`}</div>
-        <div class="media-caption" id="asset-media-cap">${cid ? `CID ${copyable(cid)} · ${gatewayLinks(cid, a.ipfs_gateways)}` : "No media attached."}</div>
+        <div class="media-caption" id="asset-media-cap">${cid ? captionHtml(cid, "") : "No file attached."}</div>
       </div>
       <div class="card">
         <h2>Asset</h2>
         <div class="kv">
-          <b>Name</b><div>${esc(a.name)}</div>
+          <b>Name</b><div class="break-anywhere">${esc(a.name)}</div>
           <b>Kind</b><div>${esc(a.kind || "—")}</div>
           <b>Amount</b><div>${formatAssetAmount(amountAtoms, a.name, units)}</div>
           <b>Holders</b><div>${a.holder_count ?? (a.holders || []).length}</div>
@@ -1307,7 +1460,7 @@ async function pageNetwork() {
         <b>Ticker</b><div>XFER</div>
         <b>P2P id</b><div>XFER — 4 bytes on every peer message so this chain is not mixed with Bitcoin or Ravencoin</div>
         <b>RPC</b><div>${s?.rpc_connected ? `connected :${s.rpc_port}` : "offline"}</div>
-        <b>Best hash</b><div class="hash">${esc(chain.bestblockhash || s?.best_hash || "—")}</div>
+        <b>Best hash</b><div>${idHtml(chain.bestblockhash || s?.best_hash || "")}</div>
         <b>Verification</b><div>${chain.verificationprogress != null ? (chain.verificationprogress * 100).toFixed(2) + "%" : "—"}</div>
         <b>P2P</b><div>port 38443 · no DNS seeds · peers join with addnode/seednode</div>
       </div>
@@ -1318,7 +1471,7 @@ async function pageNetwork() {
         <thead><tr><th>Addr</th><th>Agent</th><th>In</th><th>Height</th></tr></thead>
         <tbody>
           ${(p.peers || []).map((x) => `<tr>
-            <td class="hash">${esc(x.addr)}</td>
+            <td class="break-anywhere">${esc(x.addr)}</td>
             <td>${esc(x.subver)}</td>
             <td>${x.inbound ? "in" : "out"}</td>
             <td>${x.synced_blocks ?? x.startingheight ?? "—"}</td>
@@ -1343,9 +1496,14 @@ async function pageSearch(q) {
     <h1 class="page-title">Search</h1>
     <p class="sub">${esc(q)} · ${esc(data.kind)}</p>
     <div class="card">
-      ${results.map((r) => `<div class="winner"><div><span class="badge">${esc(r.type)}</span>
-        <a href="#/${r.type === "tx" ? "tx" : r.type === "block" ? "block" : r.type === "address" ? "address" : r.type === "asset" ? "asset" : "identity"}/${encodeURIComponent(r.id)}">${esc(r.label)}</a>
-      </div></div>`).join("") || `<div class="empty">Nothing indexed matches that query.</div>`}
+      ${results.map((r) => {
+        const kind = r.type === "tx" ? "tx" : r.type === "block" ? "block" : r.type === "address" ? "address" : r.type === "asset" ? "asset" : "identity";
+        const href = `#/${kind}/${encodeURIComponent(r.id)}`;
+        return `<div class="winner"><div class="id-line"><span class="badge">${esc(r.type)}</span>
+        <a class="break-anywhere" href="${href}" title="${esc(r.label)}">${esc(r.label)}</a>
+        ${copyButton(r.id || r.label)}
+      </div></div>`;
+      }).join("") || `<div class="empty">Nothing matched that search.</div>`}
     </div>`;
 }
 
@@ -1370,7 +1528,7 @@ const routes = [
 async function route() {
   setNav();
   const hash = location.hash || "#/";
-  app.innerHTML = `<div class="loading">Loading…</div>`;
+  app.innerHTML = `<div class="card"><div class="loading">Loading…</div></div>`;
   try {
     await refreshStatus();
     for (const [re, fn] of routes) {
@@ -1380,9 +1538,10 @@ async function route() {
         return;
       }
     }
-    app.innerHTML = `<div class="err">Unknown page.</div>`;
+    app.innerHTML = `<div class="card"><h2>Page not found</h2><p class="err">That page is not part of this explorer.</p></div>`;
   } catch (e) {
-    app.innerHTML = `<div class="err">${esc(e.message || e)}</div>`;
+    const msg = e && e.status === 404 ? "Nothing was found for that link." : (e.message || "Something went wrong. Try again.");
+    app.innerHTML = `<div class="card"><h2>Could not load this page</h2><p class="err">${esc(msg)}</p></div>`;
   }
 }
 
