@@ -49,7 +49,7 @@ def test_health_and_home(tmp_path: Path):
     assert "fallbackAttr" in cell
     assert "target=\"_blank\"" not in cell
     assert "pinataViewUrl" not in cell
-    assert "?v=ipfs-viewer-1" in home.text
+    assert "?v=explorer-polish-1" in home.text
     assert "formatAssetAmount" in text
     assert "pageAsset" in text
     assert "pageMembers" in text
