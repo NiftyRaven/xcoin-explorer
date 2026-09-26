@@ -1610,6 +1610,7 @@ function tradeCard(t, extra) {
   return `<article class="${cls}" id="trade-${esc(t.txid)}">
     <div class="trade-top">
       <span class="badge ${t.side === "sell" ? "sell" : "buy"}">${t.side === "sell" ? "SELL" : "BUY"}</span>
+      ${t.venue === "book" ? `<span class="badge" title="Filled through the Launch order book (and the curve where it was cheaper)">BOOK</span>` : ""}
       <div class="trade-sentence">${tradeSentence(t)}</div>
       ${tradeStatus(t)}
     </div>
@@ -1717,7 +1718,7 @@ async function pageTrades() {
   tradeView = { side, q, items: [] };
   app.innerHTML = `
     <h1 class="page-title">Trades</h1>
-    <p class="sub">Showing today's trades since 12:00 AM ET. Older trades are still on the chain; open any tx, block or address to see them. Confirmed means the trade is locked into the chain. Tokens on the way means the buy is in and the treasury has not delivered the tokens yet.</p>
+    <p class="sub">Showing today's trades since 12:00 AM ET. Older trades are still on the chain; open any tx, block or address to see them. Confirmed means the trade is locked into the chain. Tokens on the way means the buy is in and the treasury has not delivered the tokens yet. BOOK marks a trade filled through the Launch order book.</p>
     <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
     <div class="toolbar">
       <div class="tabs" id="trade-tabs">

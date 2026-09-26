@@ -18,6 +18,13 @@ enough. A verified buy (treasury fee, then a token delivery from the
 treasury) teaches that reserve. A copied memo with no treasury fee is
 not a trade. Only a Launch address can deliver the tokens.
 
+An ``XB1`` memo marks a trade that went through the Launch order book
+(book fills, possibly with a curve part). It counts only when the Launch
+fees are paid in the same tx: at least 0.59% of the memo value to the
+treasury, a configured Launch address, that listing's learned reserve,
+or a learned Launch fee address. A fee address is learned from a
+verified ``XL1`` sell (the output that gets the 0.60% platform fee).
+
 The public page shows only the current America/New_York civil day, from
 12:00 AM. Classified trades are kept in memory and dropped at the next
 midnight. This page does not write a trade history table.
@@ -44,6 +51,12 @@ ET = ZoneInfo("America/New_York")
 # Buys store the curve net (after the 0.60% platform fee and 0.30% creator fee).
 # Sells store the curve payout before those fees.
 FILL_TAG = "XL1"
+# Order book trade marker: ``XB1|B|NAME|tokensRaw|valueXferons`` (B/S = the taker's side).
+# NAME is the full chain name. Value is book notional plus any curve part, before fees.
+ROUTE_TAG = "XB1"
+# 0.60% platform fee, less one basis point for per-fill rounding.
+_ROUTE_MIN_FEE_BPS = 59
+ROUTE_HEX = f"{ROUTE_TAG}|".encode().hex()
 LAUNCH_PARENT = "LAUNCH_XFER"
 # 10_000 - 60 bps platform - 30 bps creator. The buyer pays gross; the memo stores net.
 _FAIR_KEEP_BPS = 10_000 - 60 - 30
@@ -176,15 +189,15 @@ def _nets(rows_in: dict[str, int], rows_out: dict[str, int]) -> dict[str, int]:
     return nets
 
 
-def _memo_text(vout: dict) -> str | None:
+def _memo_text(vout: dict, tag: str = FILL_TAG) -> str | None:
     raw = vout.get("op_return")
     if raw is None:
         return None
     text = str(raw).strip()
     if not text:
         return None
-    if "XL1" in text:
-        return text[text.index("XL1") :]
+    if tag in text:
+        return text[text.index(tag) :]
     try:
         if len(text) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in text):
             decoded = bytes.fromhex(text).decode("utf-8").strip()
@@ -192,9 +205,9 @@ def _memo_text(vout: dict) -> str | None:
             return None
     except (ValueError, UnicodeError):
         return None
-    if "XL1" not in decoded:
+    if tag not in decoded:
         return None
-    return decoded[decoded.index("XL1") :]
+    return decoded[decoded.index(tag) :]
 
 
 def decode_fill_memo(text: str) -> dict | None:
@@ -237,6 +250,37 @@ def _fill_memos(tx: dict) -> list[dict]:
         if not text:
             continue
         memo = decode_fill_memo(text)
+        if memo:
+            found.append(memo)
+    return found
+
+
+def decode_route_memo(text: str) -> dict | None:
+    """Parse one ``XB1`` order book trade. NAME is always the full chain name."""
+    parts = (text or "").strip().split("|")
+    if len(parts) != 5 or parts[0] != ROUTE_TAG:
+        return None
+    side = {"B": "buy", "S": "sell"}.get(parts[1])
+    name = parts[2].strip()
+    if not side or not name or len(name) > 40:
+        return None
+    try:
+        tokens = int(parts[3])
+        value = int(parts[4])
+    except ValueError:
+        return None
+    if tokens <= 0 or value <= 0:
+        return None
+    return {"side": side, "asset": name, "tokens": tokens, "value_atoms": value}
+
+
+def _route_memos(tx: dict) -> list[dict]:
+    found = []
+    for row in tx.get("vout") or []:
+        text = _memo_text(row, ROUTE_TAG)
+        if not text:
+            continue
+        memo = decode_route_memo(text)
         if memo:
             found.append(memo)
     return found
@@ -387,7 +431,7 @@ def _is_token_delivery(
     """Chain asset name when Launch sends exactly ``amount`` of it to ``buyer``."""
     if not view or view.get("coinbase") or not buyer or amount <= 0:
         return None
-    if _fill_memos(view):
+    if _fill_memos(view) or _route_memos(view):
         return None
     from_launch = any(
         row.get("address") in launch
@@ -518,6 +562,7 @@ def _trade_from_memo(
     if asset_atoms <= 0:
         return None
 
+    fee_address = None
     if memo["side"] == "buy":
         net = int(memo["net_atoms"])
         gross = _fair_gross(net)
@@ -563,6 +608,7 @@ def _trade_from_memo(
         xfer_atoms = payout
         tokens_pending = False
         reserve = ""
+        fee_address = _platform_fee_output(tx, payout, {trader, *payers, *gainers})
 
     if not trader or xfer_atoms <= 0:
         return None
@@ -580,8 +626,119 @@ def _trade_from_memo(
         "tokens_pending": tokens_pending,
         "delivery_txid": None,
     }
+    if fee_address:
+        trade["fee_address"] = fee_address
     trade["sentence"] = describe_trade(
         trade["side"], short_address(trader), asset_atoms, name, xfer_atoms
+    )
+    return trade
+
+
+def _platform_fee_output(tx: dict, payout: int, skip: set) -> str | None:
+    """Address paid 0.60% of a verified sell payout. That is the Launch fee address."""
+    expected = int(payout) * _PLATFORM_FEE_BPS // 10_000
+    if expected <= 0:
+        return None
+    hits = []
+    for row in tx.get("vout") or []:
+        addr = row.get("address")
+        if not addr or addr in skip or addr == LAUNCH_TREASURY or row.get("asset"):
+            continue
+        if abs(_atoms(row.get("value")) - expected) <= 1 and addr not in hits:
+            hits.append(addr)
+    return hits[0] if len(hits) == 1 else None
+
+
+def _trade_from_route(
+    memo: dict,
+    tx: dict,
+    xfer_net: dict[str, int],
+    asset_net: dict[str, dict[str, int]],
+    fee: int,
+    asset_units: dict | None,
+    allowed: set[str],
+    reserves: dict | None,
+    fee_addresses: Any,
+) -> dict | None:
+    """One order book trade marked with XB1.
+
+    The makers and the escrow are new addresses, so the anchor is the fee:
+    Launch addresses must net at least 0.59% of the memo value in this tx.
+    The trader is the taker. On a buy that is the first input (the taker
+    funds the tx). On a sell it is the address that gave up the most tokens.
+    """
+    name = memo["asset"]
+    value = int(memo["value_atoms"])
+    moved = []
+    for addr, nets in asset_net.items():
+        for held, amount in nets.items():
+            if amount and _same_asset(held, name):
+                moved.append((addr, amount, held))
+    units = _units_for(asset_units, name)
+    if units is None:
+        for _addr, amount, _held in moved:
+            got = _infer_units(memo["tokens"], abs(amount))
+            if got is not None:
+                units = got
+                break
+    if units is None and moved:
+        # A buy's curve part is delivered in a later tx, so the memo total may not
+        # match any amount here. Use the fewest decimals every moved amount fits.
+        for guess in range(0, 9):
+            step = 10 ** (8 - guess)
+            if all(abs(amount) % step == 0 for _addr, amount, _held in moved):
+                units = guess
+                break
+    if units is None:
+        # Nothing moved here and no decimals on record. The indexer reads the issue
+        # script for memo assets stored with 0, so a 0 that is still stored is real.
+        units = 0
+    asset_atoms = _scale_tokens(memo["tokens"], units)
+    if asset_atoms <= 0:
+        return None
+    launch = set(allowed) | {LAUNCH_TREASURY}
+    for alias in _asset_aliases(name):
+        learned = (reserves or {}).get(alias)
+        if learned:
+            launch.add(learned)
+    for addr in fee_addresses or ():
+        if addr:
+            launch.add(addr)
+    paid = sum(amount for addr, amount in xfer_net.items() if addr in launch and amount > 0)
+    if paid <= 0 or paid * 10_000 < value * _ROUTE_MIN_FEE_BPS:
+        return None
+    vin = list(tx.get("vin") or [])
+    trader = None
+    if memo["side"] == "sell":
+        losers = [(addr, -amount) for addr, amount, _held in moved if amount < 0 and addr not in launch]
+        if losers:
+            losers.sort(key=lambda item: -item[1])
+            trader = losers[0][0]
+    if not trader and vin:
+        trader = vin[0].get("address")
+    if not trader or trader in launch:
+        return None
+    for _addr, _amount, held in moved:
+        if held:
+            name = held
+            break
+    trade = {
+        "side": memo["side"],
+        "asset": name,
+        "asset_type": classify_asset_name(name),
+        "asset_atoms": asset_atoms,
+        "xfer_atoms": value,
+        "fee_atoms": fee,
+        "price_atoms": price_per_unit_atoms(value, asset_atoms),
+        "trader": trader,
+        "counterparty": "",
+        "reserve": "",
+        "tokens_pending": False,
+        "delivery_txid": None,
+        "venue": "book",
+    }
+    trade["sentence"] = describe_trade(
+        trade["side"], short_address(trader), asset_atoms, name, value
     )
     return trade
 
@@ -592,6 +749,7 @@ def classify_launch_trade(
     *,
     asset_units: dict | None = None,
     reserves: dict | None = None,
+    fee_addresses: Any = None,
 ) -> dict | None:
     """Return one Launch trade, or None if this tx is not a buy or sell.
 
@@ -653,11 +811,16 @@ def classify_launch_trade(
             names.update(nets)
 
     memos = _fill_memos(tx)
-    if len(memos) > 1:
+    routes = _route_memos(tx)
+    if len(memos) + len(routes) > 1:
         return None
     if len(memos) == 1:
         return _trade_from_memo(
             memos[0], tx, xfer_net, asset_net, fee, asset_units, allowed, reserves
+        )
+    if len(routes) == 1:
+        return _trade_from_route(
+            routes[0], tx, xfer_net, asset_net, fee, asset_units, allowed, reserves, fee_addresses
         )
 
     present = (set(xfer_net) | set(asset_net)) & allowed
@@ -850,6 +1013,8 @@ class TradeFeed:
         # Assets whose reserve was already sought and not found. Skips another
         # op_return scan and another round of block fetches on the next page.
         self._reserve_misses: set[str] = set()
+        # True once the index was searched for a fee address today and none was found.
+        self._fee_miss = False
 
     def _asset_units(self) -> dict[str, int]:
         """Decimal places for assets whose issue script recorded units > 0."""
@@ -1040,6 +1205,7 @@ class TradeFeed:
                 self.proceeds,
                 asset_units=self._asset_units(),
                 reserves=self._load_reserves(),
+                fee_addresses=self._load_fee_addresses(),
             )
             if not base:
                 continue
@@ -1058,6 +1224,7 @@ class TradeFeed:
                 self._day_built = 0.0
                 self._mem = None
                 self._reserve_misses = set()
+                self._fee_miss = False
         return start, end, key
 
     def _trades_between(self, start: int, end: int) -> list[dict]:
@@ -1070,13 +1237,20 @@ class TradeFeed:
             SELECT t.txid, t.height, t.n, t.time, t.fee, t.coinbase
             FROM txs t
             WHERE t.coinbase = 0 AND t.time >= ? AND t.time < ?
-              AND EXISTS (
-                SELECT 1 FROM txio i
-                WHERE i.txid = t.txid AND i.address IN ({marks})
+              AND (
+                EXISTS (
+                  SELECT 1 FROM txio i
+                  WHERE i.txid = t.txid AND i.address IN ({marks})
+                )
+                OR EXISTS (
+                  SELECT 1 FROM txio r
+                  WHERE r.txid = t.txid AND r.direction = 'out'
+                    AND (ifnull(r.op_return, '') LIKE ? OR ifnull(r.op_return, '') LIKE ?)
+                )
               )
             ORDER BY t.height DESC, t.n DESC
             """,
-            [start, end, *params],
+            [start, end, *params, f"%{ROUTE_HEX}%", f"%{ROUTE_TAG}|%"],
         ).fetchall()
         metas = [dict(r) for r in rows]
         views = self._load_views(metas)
@@ -1102,6 +1276,66 @@ class TradeFeed:
                 for alias in _asset_aliases(row["asset"]):
                     out.setdefault(alias, row["address"])
         return out
+
+    def _load_fee_addresses(self) -> set[str]:
+        try:
+            rows = self.db.conn.execute("SELECT address FROM launch_fee_addresses").fetchall()
+        except Exception:
+            return set()
+        return {row["address"] for row in rows if row["address"]}
+
+    def _remember_fee(self, fees: set[str], address: str, txid: str | None) -> None:
+        if not address or address in fees:
+            return
+        fees.add(address)
+        try:
+            self.db.conn.execute(
+                "INSERT OR IGNORE INTO launch_fee_addresses(address, txid) VALUES(?,?)",
+                (address, txid or None),
+            )
+            self.db.commit()
+        except Exception:
+            return
+
+    def _seed_fee_from_index(self, fees: set[str], reserves: dict[str, str], units: dict) -> None:
+        """Find the Launch fee address in an older verified XL1 sell. Reads the index only."""
+        if fees or self._fee_miss:
+            return
+        plain = f"{FILL_TAG}|S|"
+        seen: list[str] = []
+        for pattern in (f"%{plain}%", f"%{plain.encode().hex()}%"):
+            rows = self.db.conn.execute(
+                """
+                SELECT DISTINCT txid FROM txio
+                WHERE direction='out' AND ifnull(op_return, '') LIKE ?
+                LIMIT 20
+                """,
+                (pattern,),
+            ).fetchall()
+            for row in rows:
+                if row["txid"] not in seen:
+                    seen.append(row["txid"])
+        if seen:
+            marks = ",".join("?" * len(seen))
+            metas = [
+                dict(row)
+                for row in self.db.conn.execute(
+                    f"SELECT txid, height, n, time, coinbase FROM txs WHERE txid IN ({marks}) ORDER BY height DESC, n DESC",
+                    seen,
+                ).fetchall()
+            ]
+            views = self._load_views(metas)
+            for meta in metas:
+                view = views.get(meta["txid"])
+                memos = _fill_memos(view) if view else []
+                if len(memos) != 1:
+                    continue
+                self._seed_reserves_from_index({memos[0]["asset"]}, reserves)
+                base = classify_launch_trade(view, self.proceeds, asset_units=units, reserves=reserves)
+                if base and base.get("fee_address"):
+                    self._remember_fee(fees, base["fee_address"], view.get("txid"))
+                    return
+        self._fee_miss = True
 
     def _remember_reserve(self, reserves: dict[str, str], asset: str, address: str, txid: str | None) -> None:
         """Record a verified reserve. The first address for an asset is kept."""
@@ -1167,15 +1401,21 @@ class TradeFeed:
                 break
 
     def _assemble(self, views: list[dict]) -> list[dict]:
-        """Buys first, so a verified delivery can teach the reserve before sells are judged."""
+        """Buys first, so a verified delivery can teach the reserve before sells are judged.
+
+        Order book trades (XB1) that are not proven yet are judged last, after
+        today's sells could teach the Launch fee address.
+        """
         reserves = self._load_reserves()
+        fees = self._load_fee_addresses()
         units = self._asset_units()
         buys: list[tuple[dict, dict]] = []
         sells: list[tuple[dict, dict]] = []
         retry: list[dict] = []
+        route_retry: list[dict] = []
         for view in views:
             base = classify_launch_trade(
-                view, self.proceeds, asset_units=units, reserves=reserves
+                view, self.proceeds, asset_units=units, reserves=reserves, fee_addresses=fees
             )
             if base and base.get("side") == "buy":
                 buys.append((view, base))
@@ -1183,6 +1423,8 @@ class TradeFeed:
                 sells.append((view, base))
             elif _lone_sell_memo(view):
                 retry.append(view)
+            elif _route_memos(view):
+                route_retry.append(view)
         self._attach_deliveries(buys, views)
         confirmed = [
             (view, base)
@@ -1203,6 +1445,25 @@ class TradeFeed:
                     view, self.proceeds, asset_units=units, reserves=reserves
                 )
                 if base:
+                    sells.append((view, base))
+        for view, base in sorted(sells, key=lambda pair: _tx_after_key(pair[0])):
+            if base.get("fee_address"):
+                self._remember_fee(fees, base["fee_address"], view.get("txid"))
+        if route_retry:
+            needed = set()
+            for view in route_retry:
+                memo = _route_memos(view)[0]
+                if not any(alias in reserves for alias in _asset_aliases(memo["asset"])):
+                    needed.add(memo["asset"])
+            self._seed_reserves_from_index(needed, reserves)
+            self._seed_fee_from_index(fees, reserves, units)
+            for view in route_retry:
+                base = classify_launch_trade(
+                    view, self.proceeds, asset_units=units, reserves=reserves, fee_addresses=fees
+                )
+                if base and base.get("side") == "buy":
+                    buys.append((view, base))
+                elif base:
                     sells.append((view, base))
         found = buys + sells
         handles = self._handles([base["trader"] for _, base in found])

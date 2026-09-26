@@ -25,7 +25,7 @@ from explorer.decode import (
 )
 from explorer.hostshare import detect_host_share
 from explorer.rpc import RpcError, XCoinRPC
-from explorer.trades import _memo_text, decode_fill_memo, et_day_window
+from explorer.trades import ROUTE_TAG, _memo_text, decode_fill_memo, decode_route_memo, et_day_window
 
 # Bump to force a full XVA1 rebuild of lottery_wins / lottery_active.
 LOTTERY_INDEX_V = "4"
@@ -264,6 +264,10 @@ class Indexer:
             memo = decode_fill_memo(text) if text else None
             if memo:
                 names.add(memo["asset"])
+            route_text = _memo_text({"op_return": row["op_return"]}, ROUTE_TAG)
+            route = decode_route_memo(route_text) if route_text else None
+            if route:
+                names.add(route["asset"])
         changed = False
         for name in names:
             asset = self.db.conn.execute(

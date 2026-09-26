@@ -188,6 +188,12 @@ CREATE TABLE IF NOT EXISTS launch_reserves (
     address TEXT NOT NULL,
     txid TEXT
 );
+
+-- Launch platform fee addresses, learned from verified XL1 sells.
+CREATE TABLE IF NOT EXISTS launch_fee_addresses (
+    address TEXT PRIMARY KEY,
+    txid TEXT
+);
 """
 
 
@@ -214,6 +220,14 @@ class Database:
             CREATE TABLE IF NOT EXISTS launch_reserves (
                 asset TEXT PRIMARY KEY,
                 address TEXT NOT NULL,
+                txid TEXT
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS launch_fee_addresses (
+                address TEXT PRIMARY KEY,
                 txid TEXT
             )
             """
