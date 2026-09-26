@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from explorer.chain import BLOCK_TIME_SECONDS
+from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, parse_proceeds
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -71,6 +72,8 @@ class Settings:
     database: Path = field(default_factory=lambda: DATA_DIR / "xcoin-explorer.db")
     batch_size: int = 40
     poll_seconds: float = float(BLOCK_TIME_SECONDS)
+    # Launch market addresses. Buys pay these; sells are paid by them.
+    launch_proceeds: tuple[str, ...] = DEFAULT_LAUNCH_PROCEEDS
 
     def rpc_url(self, port: int | None = None) -> str:
         p = port if port is not None else (self.rpc_port or 38442)
@@ -116,4 +119,10 @@ def load_settings() -> Settings:
         s.database = ROOT / s.database
     s.batch_size = int(exp.get("batch_size") or s.batch_size)
     s.poll_seconds = float(exp.get("poll_seconds") or s.poll_seconds)
+    launch = cfg.get("launch") or {}
+    env_proceeds = os.environ.get("XFER_LAUNCH_PROCEEDS")
+    if env_proceeds is not None:
+        s.launch_proceeds = parse_proceeds(env_proceeds, fallback=False)
+    elif "proceeds" in launch:
+        s.launch_proceeds = parse_proceeds(launch.get("proceeds"), fallback=False)
     return s

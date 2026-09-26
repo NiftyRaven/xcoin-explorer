@@ -1520,12 +1520,242 @@ const routes = [
   [/^#\/lottery$/, pageLottery],
   [/^#\/stats$/, pageStats],
   [/^#\/rich$/, pageRich],
+  [/^#\/trades(?:\?.*)?$/, pageTrades],
   [/^#\/mempool$/, pageMempool],
   [/^#\/network$/, pageNetwork],
   [/^#\/search\/(.+)$/, (m) => pageSearch(decodeURIComponent(m[1]))],
 ];
 
+let tradePollTimer = null;
+let tradeView = null;
+
+function stopTradePoll() {
+  if (tradePollTimer) {
+    clearTimeout(tradePollTimer);
+    tradePollTimer = null;
+  }
+}
+
+function tradesHash(side, q) {
+  const p = new URLSearchParams();
+  if (side && side !== "all") p.set("side", side);
+  if (q) p.set("q", q);
+  const qs = p.toString();
+  return "#/trades" + (qs ? "?" + qs : "");
+}
+
+function tradeQuery(side, q) {
+  const p = new URLSearchParams();
+  if (side && side !== "all") p.set("side", side);
+  if (q) p.set("q", q);
+  const qs = p.toString();
+  return "/trades" + (qs ? "?" + qs : "");
+}
+
+function tradeWho(t) {
+  if (t.trader_handle) return handle(t.trader_handle);
+  const addr = t.trader || "";
+  if (!addr) return `<span class="faint">someone</span>`;
+  const shown = clipMiddle(addr, 6, 4);
+  return `<a class="mono-clip" href="#/address/${encodeURIComponent(addr)}" title="${esc(addr)}">${esc(shown)}</a>`;
+}
+
+function tradeAssetLink(name) {
+  const full = String(name || "");
+  if (!full) return "—";
+  const shown = full.length > 28 ? clipMiddle(full, 16, 8) : full;
+  return `<a href="#/asset/${encodeURIComponent(full)}" title="${esc(full)}">${esc(shown)}</a>`;
+}
+
+function tradeSentence(t) {
+  const who = tradeWho(t);
+  const qty = formatAssetAmount(t.asset_atoms, "");
+  const asset = tradeAssetLink(t.asset);
+  const xfer = atomsToXfer(t.xfer_atoms);
+  if (t.side === "sell") return `${who} sold ${qty} ${asset} for ${xfer}`;
+  return `${who} bought ${qty} ${asset} for ${xfer}`;
+}
+
+function tradeMoved(t) {
+  const asset = formatAssetAmount(t.asset_atoms, t.asset);
+  const xfer = atomsToXfer(t.xfer_atoms);
+  const price = atomsToXfer(t.price_atoms);
+  const fee = atomsToXfer(t.fee_atoms);
+  const legs = t.side === "sell"
+    ? `Received ${xfer} · Sent ${asset}`
+    : `Paid ${xfer} · Received ${asset}`;
+  return `${legs} · ${price} per unit · Fee ${fee}`;
+}
+
+function tradeStatus(t) {
+  if (t.confirmed) {
+    const n = t.confirmations ? ` · ${t.confirmations}` : "";
+    return `<span class="trade-status" title="Confirmed means locked into the chain"><i class="dot ok"></i> Confirmed${n}</span>`;
+  }
+  return `<span class="trade-status" title="This trade is not in a block yet"><i class="dot wait"></i> Confirming</span>`;
+}
+
+function tradeCard(t, extra) {
+  const when = t.time
+    ? `<span class="trade-when" title="${esc(fmtTime(t.time))}">${esc(timeAgo(t.time))}</span>`
+    : `<span class="trade-when">time unknown</span>`;
+  const block = t.height != null ? linkBlock(t.height) : `<span class="faint">not in a block yet</span>`;
+  const whoLabel = t.side === "sell" ? "Seller" : "Buyer";
+  const cls = "card trade-card" + (extra ? " " + extra : "");
+  return `<article class="${cls}" id="trade-${esc(t.txid)}">
+    <div class="trade-top">
+      <span class="badge ${t.side === "sell" ? "sell" : "buy"}">${t.side === "sell" ? "SELL" : "BUY"}</span>
+      <div class="trade-sentence">${tradeSentence(t)}</div>
+      ${tradeStatus(t)}
+    </div>
+    <p class="trade-moved">${tradeMoved(t)}</p>
+    <div class="trade-links">
+      ${when}
+      <div class="trade-link"><span class="faint">Tx</span>${linkTx(t.txid)}</div>
+      <div class="trade-link"><span class="faint">Block</span><span class="id-line">${block}</span></div>
+      <div class="trade-link"><span class="faint">Asset</span>${linkAsset(t.asset)}</div>
+      <div class="trade-link"><span class="faint">${whoLabel}</span>${linkAddr(t.trader)}</div>
+    </div>
+  </article>`;
+}
+
+function tradeStatsHtml(s) {
+  const stats = s || {};
+  return `<div class="grid stats" id="trade-stats">
+    <div class="card stat"><span>Trades today</span><b>${stats.trades_today ?? 0}</b></div>
+    <div class="card stat"><span>XFER volume today</span><b>${atomsToXfer(stats.volume_today_atoms)}</b></div>
+    <div class="card stat"><span>Pending</span><b>${stats.pending ?? 0}</b></div>
+  </div>`;
+}
+
+function renderTradeList() {
+  const list = $("#trade-list");
+  if (!list || !tradeView) return;
+  const items = tradeView.items || [];
+  list.innerHTML = items.length
+    ? items.map((t) => tradeCard(t)).join("")
+    : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet today."}</div></div>`;
+}
+
+function htmlToNode(html) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html.trim();
+  return wrap.firstElementChild;
+}
+
+async function refreshTradeHead() {
+  if (!tradeView) return;
+  const hash = location.hash || "";
+  if (!hash.startsWith("#/trades")) return;
+  try {
+    const data = await api(tradeQuery(tradeView.side, tradeView.q));
+    const stats = $("#trade-stats");
+    if (stats) stats.outerHTML = tradeStatsHtml(data.stats);
+    const incoming = data.items || [];
+    const incomingIds = new Set(incoming.map((t) => t.txid));
+    // Midnight ET drops yesterday. The server list is the whole day, so remove cards it no longer returns.
+    for (const prev of tradeView.items || []) {
+      if (!incomingIds.has(prev.txid)) {
+        const el = document.getElementById("trade-" + prev.txid);
+        if (el) el.remove();
+      }
+    }
+    tradeView.items = (tradeView.items || []).filter((t) => incomingIds.has(t.txid));
+    const seen = new Map(tradeView.items.map((t) => [t.txid, t]));
+    const fresh = [];
+    for (const t of incoming) {
+      const prev = seen.get(t.txid);
+      if (!prev) {
+        fresh.push(t);
+        continue;
+      }
+      if (prev.confirmed !== t.confirmed || prev.confirmations !== t.confirmations || prev.height !== t.height) {
+        Object.assign(prev, t);
+        const el = document.getElementById("trade-" + t.txid);
+        const node = htmlToNode(tradeCard(t));
+        if (el && node) el.replaceWith(node);
+      }
+    }
+    if (!(tradeView.items || []).length && !fresh.length) {
+      renderTradeList();
+    } else if (fresh.length) {
+      tradeView.items = fresh.concat(tradeView.items || []);
+      const list = $("#trade-list");
+      const empty = list && list.querySelector(".empty");
+      if (empty) {
+        renderTradeList();
+      } else if (list) {
+        fresh.slice().reverse().forEach((t) => {
+          const node = htmlToNode(tradeCard(t, "trade-in"));
+          if (node) list.insertBefore(node, list.firstChild);
+        });
+      }
+    }
+  } catch {
+    /* next poll retries */
+  }
+}
+
+function scheduleTradePoll() {
+  stopTradePoll();
+  tradePollTimer = setTimeout(async () => {
+    await refreshTradeHead();
+    if ((location.hash || "").startsWith("#/trades")) scheduleTradePoll();
+  }, 7500);
+}
+
+async function pageTrades() {
+  stopTradePoll();
+  const params = hashQuery();
+  const side = params.get("side") === "buy" || params.get("side") === "sell" ? params.get("side") : "all";
+  const q = (params.get("q") || "").trim();
+  tradeView = { side, q, items: [] };
+  app.innerHTML = `
+    <h1 class="page-title">Trades</h1>
+    <p class="sub">Showing today's trades since 12:00 AM ET. Older trades are still on the chain; open any tx, block or address to see them. Confirmed means the trade is locked into the chain.</p>
+    <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
+    <div class="toolbar">
+      <div class="tabs" id="trade-tabs">
+        <button type="button" data-side="all" class="${side === "all" ? "on" : ""}">All</button>
+        <button type="button" data-side="buy" class="${side === "buy" ? "on" : ""}">Buys</button>
+        <button type="button" data-side="sell" class="${side === "sell" ? "on" : ""}">Sells</button>
+      </div>
+      <form class="search" id="trade-search">
+        <input id="trade-q" type="search" value="${esc(q)}" placeholder="Asset, @handle, address, or tx" autocomplete="off" />
+        <button type="submit">Filter</button>
+      </form>
+    </div>
+    <div class="trade-list" id="trade-list"><div class="card"><div class="loading">Loading trades…</div></div></div>`;
+  document.querySelectorAll("#trade-tabs button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const next = btn.getAttribute("data-side") || "all";
+      const typed = ($("#trade-q") && $("#trade-q").value.trim()) || "";
+      location.hash = tradesHash(next, typed || q);
+    });
+  });
+  const form = $("#trade-search");
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const typed = ($("#trade-q") && $("#trade-q").value.trim()) || "";
+      location.hash = tradesHash(side, typed);
+    });
+  }
+  try {
+    const data = await api(tradeQuery(side, q));
+    tradeView.items = data.items || [];
+    const slot = $("#trade-stats-slot");
+    if (slot) slot.innerHTML = tradeStatsHtml(data.stats);
+    renderTradeList();
+  } catch (e) {
+    const list = $("#trade-list");
+    if (list) list.innerHTML = `<div class="card"><h2>Could not load trades</h2><p class="err">${esc(e.message || "Try again.")}</p></div>`;
+  }
+  if ((location.hash || "").startsWith("#/trades")) scheduleTradePoll();
+}
+
 async function route() {
+  stopTradePoll();
   setNav();
   const hash = location.hash || "#/";
   app.innerHTML = `<div class="card"><div class="loading">Loading…</div></div>`;

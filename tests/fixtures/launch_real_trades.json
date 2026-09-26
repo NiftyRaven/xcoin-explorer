@@ -1,0 +1,978 @@
+{
+  "note": "Public chain data from explorer.xferchain.net and the XL1 OP_RETURN in the raw block. No secrets.",
+  "units": 4,
+  "trades": [
+    {
+      "prefix": "8e954933",
+      "txid": "8e954933f0f624f159ddab72897ea33ed8d83758f27098679400da5889b4fad5",
+      "height": 19400,
+      "side": "buy",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 600000000000,
+      "asset_atoms": 435426510000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|B|MY_TOKEN|594600000000|43542651",
+      "tx": {
+        "txid": "8e954933f0f624f159ddab72897ea33ed8d83758f27098679400da5889b4fad5",
+        "height": 19400,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 250000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 250000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 250000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 3600000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 594600000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|B|MY_TOKEN|594600000000|43542651"
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 1800000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 149999000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "31b2c171",
+      "txid": "31b2c1711dd2a5e037f5f3c4c63e33a25666eb924ead061a0ee76dbfb795f765",
+      "height": 19402,
+      "side": "buy",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 10000000000,
+      "asset_atoms": 7208960000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|B|MY_TOKEN|9910000000|720896",
+      "tx": {
+        "txid": "31b2c1711dd2a5e037f5f3c4c63e33a25666eb924ead061a0ee76dbfb795f765",
+        "height": 19402,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 250000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 60000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 9910000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|B|MY_TOKEN|9910000000|720896"
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 30000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 239999000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "9b91cf6d",
+      "txid": "9b91cf6d0e93667a383ed93553577da0052b05ace559f6295c8cd4444c0fd1a9",
+      "height": 19377,
+      "side": "buy",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 100000000000,
+      "asset_atoms": 76471340000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|B|MY_TOKEN|99100000000|7647134",
+      "tx": {
+        "txid": "9b91cf6d0e93667a383ed93553577da0052b05ace559f6295c8cd4444c0fd1a9",
+        "height": 19377,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 2615077789759,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 600000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 99100000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|B|MY_TOKEN|99100000000|7647134"
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 300000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 2515076789759,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "a28db501",
+      "txid": "a28db501b38caa89ea73a15d71902ba473f53220075d90c8ec9dca793bfd3d2c",
+      "height": 19378,
+      "side": "buy",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 1250000000000,
+      "asset_atoms": 941933690000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|B|MY_TOKEN|1238750000000|94193369",
+      "tx": {
+        "txid": "a28db501b38caa89ea73a15d71902ba473f53220075d90c8ec9dca793bfd3d2c",
+        "height": 19378,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 2426030496147,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 7500000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 1238750000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|B|MY_TOKEN|1238750000000|94193369"
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 3750000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 1176029496147,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "0bb168a1",
+      "txid": "0bb168a1cce36d03138ee7748b7606345659f9af5cdea7d81bd8105d5072f1a4",
+      "height": 19379,
+      "side": "buy",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 450000000000,
+      "asset_atoms": 335331380000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|B|MY_TOKEN|445950000000|33533138",
+      "tx": {
+        "txid": "0bb168a1cce36d03138ee7748b7606345659f9af5cdea7d81bd8105d5072f1a4",
+        "height": 19379,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 592271911691,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 2700000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 445950000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|B|MY_TOKEN|445950000000|33533138"
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 1350000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 142270911691,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "ee27c6a8",
+      "txid": "ee27c6a87da23e6139e7c1f04eeba997e9f005299b969a5c60ea2f1b3ba2caa6",
+      "height": 19357,
+      "side": "sell",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 669554238422,
+      "asset_atoms": 500000000000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|S|MY_TOKEN|669554238422|50000000",
+      "tx": {
+        "txid": "ee27c6a87da23e6139e7c1f04eeba997e9f005299b969a5c60ea2f1b3ba2caa6",
+        "height": 19357,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 1765924414941,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 5401152540210,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 9544423620000,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|S|MY_TOKEN|669554238422|50000000"
+          },
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 2429451665218,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 4731598301788,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 2008662715,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xib5C56dfSnz2gkDYqwvK5wcga6x41QEmq",
+            "value": 4017325430,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 500000000000,
+            "asset_kind": "transfer"
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 9044423620000,
+            "asset_kind": "transfer"
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "19c140e9",
+      "txid": "19c140e94597c0c3fd6dc561cc9c52f802788ba4499216bdc9368ed3d1a087b4",
+      "height": 19291,
+      "side": "sell",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 103231292087,
+      "asset_atoms": 101573580000,
+      "fee_atoms": 54036000,
+      "memo": "XL1|S|MY_TOKEN|103231292087|10157358",
+      "tx": {
+        "txid": "19c140e94597c0c3fd6dc561cc9c52f802788ba4499216bdc9368ed3d1a087b4",
+        "height": 19291,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XsJGDEKRzHsB2sQxGD8fVAqgYGo5CyCP7q",
+            "value": 2136884416635,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 297300000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 293252910000,
+            "asset_kind": null
+          },
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 245865540000,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 138038790000,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|S|MY_TOKEN|103231292087|10157358"
+          },
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 2239132591094,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 194068707913,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 309693876,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xib5C56dfSnz2gkDYqwvK5wcga6x41QEmq",
+            "value": 619387752,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 101573580000,
+            "asset_kind": "transfer"
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 575583660000,
+            "asset_kind": "transfer"
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "2eb01a39",
+      "txid": "2eb01a39dcf83bee27adef05a048ea3d33894d75f5a05c7b4387a218d1efe9d4",
+      "height": 19291,
+      "side": "sell",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 17883263750,
+      "asset_atoms": 15000000000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|S|MY_TOKEN|17883263750|1500000",
+      "tx": {
+        "txid": "2eb01a39dcf83bee27adef05a048ea3d33894d75f5a05c7b4387a218d1efe9d4",
+        "height": 19291,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XsJGDEKRzHsB2sQxGD8fVAqgYGo5CyCP7q",
+            "value": 250000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 6465464338897,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 575583660000,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|S|MY_TOKEN|17883263750|1500000"
+          },
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 267721314377,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 6447581075147,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 53649791,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xib5C56dfSnz2gkDYqwvK5wcga6x41QEmq",
+            "value": 107299582,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 15000000000,
+            "asset_kind": "transfer"
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 560583660000,
+            "asset_kind": "transfer"
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "540ef3dd",
+      "txid": "540ef3dd3ee8df89991eef58ec4d7047b9271bc5652b8acaf775c775bc6ae0fa",
+      "height": 19293,
+      "side": "sell",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 715257423786,
+      "asset_atoms": 534402210000,
+      "fee_atoms": 54036000,
+      "memo": "XL1|S|MY_TOKEN|715257423786|53440221",
+      "tx": {
+        "txid": "540ef3dd3ee8df89991eef58ec4d7047b9271bc5652b8acaf775c775bc6ae0fa",
+        "height": 19293,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 250000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 6447581075147,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 5869143290000,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 560583660000,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 4258317400000,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|S|MY_TOKEN|715257423786|53440221"
+          },
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 958766070973,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 5732323651361,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 2145772271,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xib5C56dfSnz2gkDYqwvK5wcga6x41QEmq",
+            "value": 4291544542,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 534402210000,
+            "asset_kind": "transfer"
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 10153642140000,
+            "asset_kind": "transfer"
+          }
+        ]
+      }
+    },
+    {
+      "prefix": "461adaa8",
+      "txid": "461adaa81dd8f9752cd403bb3c6039e0f7b3fec5850b03f79566f6ddaace9192",
+      "height": 19303,
+      "side": "sell",
+      "asset": "LAUNCH_XFER/MY_TOKEN",
+      "xfer_atoms": 814489751733,
+      "asset_atoms": 609218520000,
+      "fee_atoms": 1000000,
+      "memo": "XL1|S|MY_TOKEN|814489751733|60921852",
+      "tx": {
+        "txid": "461adaa81dd8f9752cd403bb3c6039e0f7b3fec5850b03f79566f6ddaace9192",
+        "height": 19303,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 958766070973,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 5732323651361,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 10153642140000,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": null,
+            "value": 0,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null,
+            "op_return": "XL1|S|MY_TOKEN|814489751733|60921852"
+          },
+          {
+            "address": "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+            "value": 1765924414941,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+            "value": 4917833899628,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XwxSKWAiYte28LqGotp67igqwLxppCJ69t",
+            "value": 2443469255,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xib5C56dfSnz2gkDYqwvK5wcga6x41QEmq",
+            "value": 4886938510,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 609218520000,
+            "asset_kind": "transfer"
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 9544423620000,
+            "asset_kind": "transfer"
+          }
+        ]
+      }
+    }
+  ],
+  "non_trades": [
+    {
+      "label": "5728603b",
+      "why": "token delivery",
+      "tx": {
+        "txid": "5728603bb17797eca614c095ca5ab8356f3fc1a3c183016ded5fba1b4be08b0d",
+        "height": 19400,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 70845209,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 66530038950000,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 70345196,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 435426510000,
+            "asset_kind": "transfer"
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 66094612440000,
+            "asset_kind": "transfer"
+          }
+        ]
+      }
+    },
+    {
+      "label": "7c73991d",
+      "why": "plain XFER split",
+      "tx": {
+        "txid": "7c73991d6111ba39f4eab00246fe730f94307014b4b76725dd7cbbf9f5f63d55",
+        "height": 19402,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "Xpor7FYX9txHyujEknGiLjTYnbaiXc7d64",
+            "value": 500000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy",
+            "value": 125000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XgUiUfSW1KsbjxVWjZVAfxemS3RGEzc9Wz",
+            "value": 249999764212,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XvERAEjtwe2fuRWMSfuk3JXDShAUWTScj9",
+            "value": 125000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          }
+        ]
+      }
+    },
+    {
+      "label": "fae47e33",
+      "why": "asset issue",
+      "tx": {
+        "txid": "fae47e33021bb013b4f59613709f34063bbf6d13cd6b7d8bdee4e6f7d5406e0e",
+        "height": 18190,
+        "coinbase": false,
+        "vin": [
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 10000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 4054945,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER!",
+            "asset_amount": 100000000,
+            "asset_kind": null
+          }
+        ],
+        "vout": [
+          {
+            "address": "XissueSubAssetXXXXXXXXXXXXXXcHkFpF",
+            "value": 10000000000,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 3270076,
+            "asset": null,
+            "asset_amount": 0,
+            "asset_kind": null
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER!",
+            "asset_amount": 100000000,
+            "asset_kind": "transfer"
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN!",
+            "asset_amount": 100000000,
+            "asset_kind": "new"
+          },
+          {
+            "address": "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+            "value": 0,
+            "asset": "LAUNCH_XFER/MY_TOKEN",
+            "asset_amount": 77700000000000,
+            "asset_kind": "new"
+          }
+        ]
+      }
+    }
+  ]
+}

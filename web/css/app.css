@@ -392,3 +392,48 @@ td .id-line { max-width: min(100%, 260px); }
 }
 .kind-pill b { display: block; font-size: 20px; }
 .kind-pill span { color: var(--faint); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+.badge.buy { color: var(--green); border-color: #1e4a36; background: rgba(61, 214, 140, 0.1); }
+.badge.sell { color: var(--gold2); border-color: #5a4518; background: rgba(226, 179, 74, 0.1); }
+.trade-list { display: flex; flex-direction: column; gap: 12px; }
+.trade-card { padding: 14px 16px; }
+.trade-top {
+  display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap;
+}
+.trade-sentence {
+  flex: 1 1 200px; min-width: 0; font-size: 15px; line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.trade-sentence .mono-clip { display: inline; white-space: nowrap; max-width: 9em; vertical-align: bottom; }
+.trade-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--muted); font-size: 12px; flex: 0 0 auto;
+}
+.dot {
+  width: 8px; height: 8px; border-radius: 99px; background: var(--faint); display: inline-block;
+}
+.dot.ok { background: var(--green); }
+.dot.wait { background: var(--gold); }
+.trade-moved { color: var(--muted); font-size: 13px; margin: 8px 0 10px; overflow-wrap: anywhere; }
+.trade-links {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+}
+.trade-link {
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0; max-width: 100%; flex: 1 1 220px;
+}
+.trade-link > .faint { flex: 0 0 auto; }
+.trade-link .id-line { flex: 1 1 auto; max-width: 100%; }
+.trade-when { color: var(--faint); font-size: 12px; }
+.trade-card.trade-in { animation: tradeIn 0.4s ease; }
+@keyframes tradeIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trade-card.trade-in { animation: none; }
+}
+@media (max-width: 720px) {
+  .trade-link { flex-basis: 100%; }
+  .trade-sentence { flex-basis: 100%; }
+}

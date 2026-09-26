@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS txio (
     spent_n INTEGER,
     coinbase INTEGER DEFAULT 0,
     script_type TEXT,
+    op_return TEXT,
     UNIQUE(txid, n, direction)
 );
 CREATE INDEX IF NOT EXISTS idx_txio_addr ON txio(address, direction);
@@ -198,6 +199,9 @@ class Database:
             self.conn.execute("ALTER TABLE lottery_active ADD COLUMN xaccount TEXT")
         if "n" not in cols:
             self.conn.execute("ALTER TABLE lottery_active ADD COLUMN n INTEGER DEFAULT 0")
+        io_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(txio)")}
+        if "op_return" not in io_cols:
+            self.conn.execute("ALTER TABLE txio ADD COLUMN op_return TEXT")
         self.conn.commit()
 
     def close(self) -> None:

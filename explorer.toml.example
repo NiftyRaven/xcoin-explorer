@@ -32,3 +32,16 @@ batch_size = 40
 # lottery slot time (BLOCK_TIME_SECONDS = 60). While catching up, the
 # indexer does not wait this long.
 poll_seconds = 60
+
+[launch]
+# Launch parties. A fill is an XL1 OP_RETURN plus the XFER leg, and one
+# of these addresses has to be on the Launch side (buy proceeds, sell
+# payout and inventory). Add any other reserve here.
+# Override with XFER_LAUNCH_PROCEEDS (comma-separated) if you need to.
+# The op_return column is added with ALTER TABLE. Restarting the explorer
+# copies today's missing payloads from the node. Do not delete the database.
+proceeds = [
+    "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+    "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+    "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+]
