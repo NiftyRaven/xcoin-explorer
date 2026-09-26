@@ -670,7 +670,11 @@ class Indexer:
             script_type = spk.get("type") or parsed.get("script_type")
             asset_info = None
             rpc_asset = spk.get("asset")
+            parsed_asset = parsed.get("asset") if isinstance(parsed.get("asset"), dict) else {}
             if isinstance(rpc_asset, dict) and rpc_asset.get("name"):
+                units = rpc_asset.get("units")
+                if units is None:
+                    units = parsed_asset.get("units")
                 asset_info = {
                     "name": rpc_asset.get("name"),
                     "amount": _atoms(rpc_asset.get("amount") or 0),
@@ -680,8 +684,8 @@ class Indexer:
                         "transfer_asset": "transfer",
                     }.get(script_type or "", "transfer"),
                     "type_name": classify_asset_name(rpc_asset.get("name") or ""),
-                    "units": None,
-                    "reissuable": None,
+                    "units": units,
+                    "reissuable": rpc_asset.get("reissuable", parsed_asset.get("reissuable")),
                     "ipfs": normalize_ipfs(rpc_asset.get("message") or "") or (rpc_asset.get("message") or ""),
                 }
             elif parsed.get("asset"):
@@ -701,12 +705,13 @@ class Indexer:
             asset_name = asset_info["name"] if asset_info else None
             asset_amount = int(asset_info["amount"]) if asset_info else 0
             asset_kind = asset_info["kind"] if asset_info else None
+            op_return = parsed.get("op_return") or None
 
             self.db.conn.execute(
                 """
                 INSERT OR REPLACE INTO txio(txid, n, direction, address, value, asset, asset_amount,
-                    asset_kind, spent_txid, spent_n, coinbase, script_type)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    asset_kind, spent_txid, spent_n, coinbase, script_type, op_return)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     txid,
@@ -721,6 +726,7 @@ class Indexer:
                     None,
                     1 if coinbase else 0,
                     script_type,
+                    op_return,
                 ),
             )
 
@@ -839,7 +845,8 @@ class Indexer:
                             THEN assets.amount ELSE COALESCE(excluded.amount, assets.amount) END,
                 ipfs=COALESCE(NULLIF(excluded.ipfs,''), assets.ipfs),
                 issuer=COALESCE(assets.issuer, excluded.issuer),
-                x_handle=COALESCE(assets.x_handle, excluded.x_handle)
+                x_handle=COALESCE(assets.x_handle, excluded.x_handle),
+                units=CASE WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units ELSE assets.units END
             """,
             (
                 name,

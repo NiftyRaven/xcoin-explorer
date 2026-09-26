@@ -26,14 +26,30 @@ from zoneinfo import ZoneInfo
 
 from explorer.amounts import format_xfer, xfer_to_atoms
 from explorer.chain import COIN, classify_asset_name
+from explorer.decode import parse_vout_script
 from explorer.queries import norm_handle
 
 # 12:00 AM America/New_York. zoneinfo applies EST/EDT, including the
 # spring-forward and fall-back days (the odd hour is at 2:00 AM, not midnight).
 ET = ZoneInfo("America/New_York")
 
-# Receives XFER on a Launch buy and pays XFER on a Launch sell.
-DEFAULT_LAUNCH_PROCEEDS = ("XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",)
+# Launch fill marker in an OP_RETURN. ``XL1|B|NAME|xferons|tokens`` or ``XL1|S|...``.
+# Buys store the curve net (after the 0.60% platform fee and 0.30% creator fee).
+# Sells store the curve payout before those fees.
+FILL_TAG = "XL1"
+LAUNCH_PARENT = "LAUNCH_XFER"
+# 10_000 - 60 bps platform - 30 bps creator. The buyer pays gross; the memo stores net.
+_FAIR_KEEP_BPS = 10_000 - 60 - 30
+
+# Addresses that appear on the Launch side of a fill. Buys pay the reserve
+# (or proceeds). Sells are paid by the reserve. The treasury holds inventory
+# and takes the platform fee on a buy. A listing can use another reserve;
+# add it to ``[launch] proceeds`` or ``XFER_LAUNCH_PROCEEDS``.
+DEFAULT_LAUNCH_PROCEEDS = (
+    "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+    "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+    "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+)
 
 # How often to rebuild today's in-memory list and re-read the mempool.
 # Confirmed rows are read from the chain index for this window only.
@@ -150,9 +166,176 @@ def _nets(rows_in: dict[str, int], rows_out: dict[str, int]) -> dict[str, int]:
     return nets
 
 
+def _buy_gross_atoms(net: int) -> int:
+    """XFER the buyer paid. The memo stores the curve net, not this gross."""
+    if net > 0 and (net * 10_000) % _FAIR_KEEP_BPS == 0:
+        gross = net * 10_000 // _FAIR_KEEP_BPS
+        if gross > net:
+            return gross
+    return net
+
+
+def _memo_text(vout: dict) -> str | None:
+    raw = vout.get("op_return")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if "XL1" in text:
+        return text[text.index("XL1") :]
+    try:
+        if len(text) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in text):
+            decoded = bytes.fromhex(text).decode("utf-8").strip()
+        else:
+            return None
+    except (ValueError, UnicodeError):
+        return None
+    if "XL1" not in decoded:
+        return None
+    return decoded[decoded.index("XL1") :]
+
+
+def decode_fill_memo(text: str) -> dict | None:
+    """Parse one ``XL1`` fill. Asset names without ``/`` are ``LAUNCH_XFER`` children."""
+    parts = (text or "").strip().split("|")
+    if len(parts) != 5 or parts[0] != FILL_TAG:
+        return None
+    side = {"B": "buy", "S": "sell"}.get(parts[1])
+    if not side:
+        return None
+    field = parts[2]
+    if field.startswith("*"):
+        name = field[1:]
+    elif "/" in field:
+        name = field
+    else:
+        name = f"{LAUNCH_PARENT}/{field}"
+    if not name:
+        return None
+    try:
+        xferons = int(parts[3])
+        tokens = int(parts[4])
+    except ValueError:
+        return None
+    if xferons <= 0 or tokens <= 0:
+        return None
+    return {"side": side, "asset": name, "net_atoms": xferons, "tokens": tokens}
+
+
+def _fill_memos(tx: dict) -> list[dict]:
+    found = []
+    for row in tx.get("vout") or []:
+        text = _memo_text(row)
+        if not text:
+            continue
+        memo = decode_fill_memo(text)
+        if memo:
+            found.append(memo)
+    return found
+
+
+def _scale_tokens(tokens: int, units: int) -> int:
+    units = int(units)
+    if units < 0 or units > 8:
+        return 0
+    return int(tokens) * 10 ** (8 - units)
+
+
+def _infer_units(tokens: int, moved: int) -> int | None:
+    if tokens <= 0 or moved <= 0:
+        return None
+    for units in range(0, 9):
+        if tokens * 10 ** (8 - units) == moved:
+            return units
+    return None
+
+
+def _trade_from_memo(
+    memo: dict,
+    tx: dict,
+    xfer_net: dict[str, int],
+    asset_net: dict[str, dict[str, int]],
+    fee: int,
+    asset_units: dict | None,
+) -> dict | None:
+    """One Launch fill marked with XL1. Extra fee and change outputs are allowed."""
+    name = memo["asset"]
+    moved = [(addr, nets.get(name, 0)) for addr, nets in asset_net.items() if nets.get(name, 0)]
+    units = None
+    if asset_units and asset_units.get(name) is not None and int(asset_units.get(name) or 0) > 0:
+        units = int(asset_units[name])
+    inferred = None
+    for _addr, amount in moved:
+        got = _infer_units(memo["tokens"], abs(amount))
+        if got is not None:
+            inferred = got
+            break
+    if units is None:
+        units = inferred
+    if units is None:
+        return None
+    asset_atoms = _scale_tokens(memo["tokens"], units)
+    if asset_atoms <= 0:
+        return None
+
+    if memo["side"] == "buy":
+        net = int(memo["net_atoms"])
+        paid_net = any(amount == net for amount in xfer_net.values() if amount > 0)
+        if not paid_net:
+            paid_net = any(_atoms(row.get("value")) == net for row in tx.get("vout") or [])
+        if not paid_net:
+            return None
+        gross = _buy_gross_atoms(net)
+        losses = [(addr, -amount) for addr, amount in xfer_net.items() if amount < 0 and addr]
+        if not losses:
+            return None
+        target = gross + fee
+        losses.sort(key=lambda item: (abs(item[1] - target), -item[1]))
+        trader = losses[0][0]
+        counterparty = next((addr for addr, amount in xfer_net.items() if amount == net and addr), None)
+        if counterparty is None:
+            for row in tx.get("vout") or []:
+                if _atoms(row.get("value")) == net and row.get("address"):
+                    counterparty = row["address"]
+                    break
+        xfer_atoms = gross
+    else:
+        if inferred is None and not any(abs(amount) == asset_atoms for _addr, amount in moved):
+            return None
+        losers = [(addr, -amount) for addr, amount in moved if amount < 0 and addr]
+        if not losers:
+            return None
+        exact = [addr for addr, loss in losers if loss == asset_atoms]
+        trader = exact[0] if len(exact) == 1 else max(losers, key=lambda item: item[1])[0]
+        gainers = [addr for addr, amount in moved if amount == asset_atoms and addr]
+        counterparty = gainers[0] if gainers else ""
+        xfer_atoms = int(memo["net_atoms"])
+
+    if not trader or xfer_atoms <= 0:
+        return None
+    trade = {
+        "side": memo["side"],
+        "asset": name,
+        "asset_type": classify_asset_name(name),
+        "asset_atoms": asset_atoms,
+        "xfer_atoms": xfer_atoms,
+        "fee_atoms": fee,
+        "price_atoms": price_per_unit_atoms(xfer_atoms, asset_atoms),
+        "trader": trader,
+        "counterparty": counterparty or "",
+    }
+    trade["sentence"] = describe_trade(
+        trade["side"], short_address(trader), asset_atoms, name, xfer_atoms
+    )
+    return trade
+
+
 def classify_launch_trade(
     tx: dict,
     proceeds: Any = None,
+    *,
+    asset_units: dict | None = None,
 ) -> dict | None:
     """Return one Launch trade, or None if this tx is not a buy or sell.
 
@@ -212,6 +395,12 @@ def classify_launch_trade(
         if nets:
             asset_net[addr] = nets
             names.update(nets)
+
+    memos = _fill_memos(tx)
+    if len(memos) > 1:
+        return None
+    if len(memos) == 1:
+        return _trade_from_memo(memos[0], tx, xfer_net, asset_net, fee, asset_units)
 
     present = (set(xfer_net) | set(asset_net)) & allowed
     if len(present) != 1:
@@ -351,6 +540,10 @@ def tx_view_from_rpc(raw: dict, db) -> dict | None:
             "reissue_asset": "reissue",
             "transfer_asset": "transfer",
         }.get(spk.get("type") or "", "transfer" if name else None)
+        op_return = None
+        if spk.get("type") == "nulldata" or str(spk.get("hex") or "").startswith("6a"):
+            parsed = parse_vout_script(spk.get("hex") or "")
+            op_return = parsed.get("op_return") or None
         vout.append(
             {
                 "address": address,
@@ -358,6 +551,7 @@ def tx_view_from_rpc(raw: dict, db) -> dict | None:
                 "asset": name,
                 "asset_amount": amount,
                 "asset_kind": kind,
+                "op_return": op_return,
                 "n": int(vout_row.get("n") if vout_row.get("n") is not None else i),
             }
         )
@@ -395,6 +589,19 @@ class TradeFeed:
         self._day_key: str | None = None
         self._day_trades: list[dict] = []
         self._day_built: float = 0.0
+
+    def _asset_units(self) -> dict[str, int]:
+        """Decimal places for assets whose issue script recorded units > 0."""
+        try:
+            rows = self.db.conn.execute("SELECT name, units FROM assets").fetchall()
+        except Exception:
+            return {}
+        out: dict[str, int] = {}
+        for row in rows:
+            units = int(row["units"] or 0)
+            if row["name"] and units > 0:
+                out[row["name"]] = units
+        return out
 
     def tip_height(self) -> int:
         tip = None
@@ -504,6 +711,7 @@ class TradeFeed:
                     "asset": row["asset"],
                     "asset_amount": int(row["asset_amount"] or 0),
                     "asset_kind": row["asset_kind"],
+                    "op_return": row["op_return"] if "op_return" in row.keys() else None,
                 }
                 if row["direction"] == "in":
                     vin.append(item)
@@ -562,7 +770,7 @@ class TradeFeed:
                 continue
             if not view.get("time"):
                 view["time"] = int(time.time())
-            base = classify_launch_trade(view, self.proceeds)
+            base = classify_launch_trade(view, self.proceeds, asset_units=self._asset_units())
             if not base:
                 continue
             trades.append(self._decorate(base, view, self._handles([base["trader"]])))
@@ -609,7 +817,7 @@ class TradeFeed:
             when = int(view.get("time") or 0)
             if when < start or when >= end:
                 continue
-            base = classify_launch_trade(view, self.proceeds)
+            base = classify_launch_trade(view, self.proceeds, asset_units=self._asset_units())
             if base:
                 found.append((view, base))
         handles = self._handles([base["trader"] for _, base in found])

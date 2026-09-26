@@ -34,7 +34,14 @@ batch_size = 40
 poll_seconds = 60
 
 [launch]
-# Addresses that take XFER on a Launch buy and pay XFER on a Launch sell.
-# The public Trades page only lists swaps with one of these addresses.
+# Launch parties. A fill is an XL1 OP_RETURN plus the XFER leg.
+# Buys pay the reserve (or proceeds). Sells are paid by the reserve.
+# The treasury holds listing inventory. Add any other reserve here.
 # Override with XFER_LAUNCH_PROCEEDS (comma-separated) if you need to.
-proceeds = ["XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF"]
+# Reindex after changing this (delete the explorer database) so older
+# OP_RETURN payloads are stored.
+proceeds = [
+    "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
+    "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
+    "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,7 +53,9 @@ def tx(vin, vout, *, coinbase=False, height=10, txid="aa" * 32):
 
 
 def test_parse_proceeds_list_is_configurable():
-    assert DEFAULT_LAUNCH_PROCEEDS == ("XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",)
+    assert DEFAULT_LAUNCH_PROCEEDS[0] == "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF"
+    assert "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo" in DEFAULT_LAUNCH_PROCEEDS
+    assert "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF" in DEFAULT_LAUNCH_PROCEEDS
     assert parse_proceeds(" Xabc , Xdef , Xabc ") == ("Xabc", "Xdef")
     assert parse_proceeds(["Xabc", "", "Xdef"]) == ("Xabc", "Xdef")
     assert parse_proceeds("", fallback=False) == ()
@@ -644,6 +647,43 @@ def _assert_day_rollover(db_path: Path, start: int, end: int, day_key: str, next
     assert "trade_history" not in tables
     assert "launch_trades" not in tables
     db.close()
+
+
+def test_real_launch_fills_match_chain_memos():
+    """Ten Launch fills from 2026-09-25, plus nearby non-trades.
+
+    Amounts come from the XL1 OP_RETURN in the raw block. Buys quote the
+    gross the buyer paid (6,000 and 100 XFER); the memo itself stores the
+    curve net after the 0.60% and 0.30% fees. Sells quote the curve payout.
+    """
+    doc = json.loads((ROOT / "tests" / "fixtures" / "launch_real_trades.json").read_text(encoding="utf-8"))
+    units = {"LAUNCH_XFER/MY_TOKEN": doc["units"]}
+    for row in doc["trades"]:
+        trade = classify_launch_trade(row["tx"], asset_units=units)
+        assert trade is not None, row["prefix"]
+        assert trade["side"] == row["side"], row["prefix"]
+        assert trade["asset"] == row["asset"], row["prefix"]
+        assert trade["xfer_atoms"] == row["xfer_atoms"], row["prefix"]
+        assert trade["asset_atoms"] == row["asset_atoms"], row["prefix"]
+        assert trade["fee_atoms"] == row["fee_atoms"], row["prefix"]
+        assert trade["asset_type"] == "sub"
+    assert doc["trades"][0]["prefix"] == "8e954933"
+    assert doc["trades"][1]["prefix"] == "31b2c171"
+
+    sell = next(row for row in doc["trades"] if row["prefix"] == "ee27c6a8")
+    inferred = classify_launch_trade(sell["tx"])
+    assert inferred is not None and inferred["asset_atoms"] == sell["asset_atoms"]
+
+    buy = doc["trades"][0]["tx"]
+    assert classify_launch_trade(buy) is None
+    hexed = json.loads(json.dumps(buy))
+    for vout in hexed["vout"]:
+        if vout.get("op_return"):
+            vout["op_return"] = vout["op_return"].encode().hex()
+    assert classify_launch_trade(hexed, asset_units=units)["xfer_atoms"] == 6000 * COIN
+
+    for row in doc["non_trades"]:
+        assert classify_launch_trade(row["tx"], asset_units=units) is None, row["label"]
 
 
 def test_feed_drops_previous_et_day_at_midnight_including_dst(tmp_path: Path):
