@@ -198,7 +198,13 @@ def _memo_text(vout: dict) -> str | None:
 
 
 def decode_fill_memo(text: str) -> dict | None:
-    """Parse one ``XL1`` fill. Asset names without ``/`` are ``LAUNCH_XFER`` children."""
+    """Parse one ``XL1`` fill.
+
+    ``NAME`` with no slash is a ``LAUNCH_XFER`` child. ``*NAME`` is that
+    exact asset (a new root, or a root unique). A field that already
+    contains ``/`` or ``#`` is the chain name: a sub-asset of any root,
+    or a unique NFT.
+    """
     parts = (text or "").strip().split("|")
     if len(parts) != 5 or parts[0] != FILL_TAG:
         return None
@@ -208,7 +214,7 @@ def decode_fill_memo(text: str) -> dict | None:
     field = parts[2]
     if field.startswith("*"):
         name = field[1:]
-    elif "/" in field:
+    elif "/" in field or "#" in field:
         name = field
     else:
         name = f"{LAUNCH_PARENT}/{field}"
@@ -267,9 +273,9 @@ def _asset_aliases(name: str) -> set[str]:
     parent = f"{LAUNCH_PARENT}/"
     if text.startswith(parent):
         short = text[len(parent) :]
-        if short and "/" not in short:
+        if short and "/" not in short and "#" not in short:
             names.add(short)
-    elif "/" not in text:
+    elif "/" not in text and "#" not in text:
         names.add(f"{LAUNCH_PARENT}/{text}")
     return names
 
@@ -279,15 +285,16 @@ def _same_asset(left: str, right: str) -> bool:
 
 
 def _units_for(asset_units: dict | None, name: str) -> int | None:
-    if not asset_units:
-        return None
-    for alias in _asset_aliases(name):
-        raw = asset_units.get(alias)
-        if raw is None:
-            continue
-        units = int(raw or 0)
-        if units > 0:
-            return units
+    """Decimal places. Unique names (``#``) are 0. A stored 0 on a fungible is unknown."""
+    if asset_units:
+        for alias in _asset_aliases(name):
+            if alias not in asset_units:
+                continue
+            units = int(asset_units[alias] or 0)
+            if units > 0:
+                return units
+    if "#" in (name or ""):
+        return 0
     return None
 
 
@@ -376,12 +383,12 @@ def _is_token_delivery(
     amount: int,
     buyer: str,
     launch: set[str],
-) -> bool:
-    """Treasury (or another configured Launch address) sends exactly ``amount`` to ``buyer``."""
+) -> str | None:
+    """Chain asset name when Launch sends exactly ``amount`` of it to ``buyer``."""
     if not view or view.get("coinbase") or not buyer or amount <= 0:
-        return False
+        return None
     if _fill_memos(view):
-        return False
+        return None
     from_launch = any(
         row.get("address") in launch
         and _same_asset(row.get("asset") or "", asset)
@@ -389,13 +396,16 @@ def _is_token_delivery(
         for row in view.get("vin") or []
     )
     if not from_launch:
-        return False
-    return any(
-        row.get("address") == buyer
-        and _same_asset(row.get("asset") or "", asset)
-        and int(row.get("asset_amount") or 0) == int(amount)
-        for row in view.get("vout") or []
-    )
+        return None
+    for row in view.get("vout") or []:
+        held = row.get("asset") or ""
+        if (
+            row.get("address") == buyer
+            and _same_asset(held, asset)
+            and int(row.get("asset_amount") or 0) == int(amount)
+        ):
+            return held or asset
+    return None
 
 
 def _tx_after_key(view: dict) -> tuple:
@@ -511,6 +521,10 @@ def _trade_from_memo(
         exact = [addr for addr, loss in losers if loss == asset_atoms]
         trader = exact[0] if len(exact) == 1 else max(losers, key=lambda item: item[1])[0]
         counterparty = gainers[0]
+        for addr, amount, held in moved:
+            if addr in gainers and amount == asset_atoms and held:
+                name = held
+                break
         xfer_atoms = payout
         tokens_pending = False
         reserve = ""
@@ -1084,13 +1098,16 @@ class TradeFeed:
                     continue
                 if not _tx_after(cand, view):
                     continue
-                if not _is_token_delivery(
+                delivered = _is_token_delivery(
                     cand, base["asset"], int(base["asset_atoms"]), base["trader"], launch
-                ):
+                )
+                if not delivered:
                     continue
                 if cand.get("height") is None:
                     base["delivery_txid"] = txid
                     continue
+                base["asset"] = delivered
+                base["asset_type"] = classify_asset_name(delivered)
                 base["tokens_pending"] = False
                 base["delivery_txid"] = txid
                 used.add(txid)
