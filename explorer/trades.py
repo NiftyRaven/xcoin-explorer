@@ -10,26 +10,57 @@ client here, so a trade is recognized from the chain:
 
 The known proceeds address is the default. ``explorer.toml`` ``[launch]``
 or ``XFER_LAUNCH_PROCEEDS`` replaces that list.
+
+The public page shows only the current America/New_York civil day, from
+12:00 AM. Classified trades are kept in memory and dropped at the next
+midnight. This page does not write a trade history table.
 """
 
 from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from explorer.amounts import format_xfer, xfer_to_atoms
 from explorer.chain import COIN, classify_asset_name
-from explorer.queries import norm_handle, paginate
+from explorer.queries import norm_handle
+
+# 12:00 AM America/New_York. zoneinfo applies EST/EDT, including the
+# spring-forward and fall-back days (the odd hour is at 2:00 AM, not midnight).
+ET = ZoneInfo("America/New_York")
 
 # Receives XFER on a Launch buy and pays XFER on a Launch sell.
 DEFAULT_LAUNCH_PROCEEDS = ("XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",)
 
-# How often to re-read the mempool. Confirmed trades come from the index.
+# How often to rebuild today's in-memory list and re-read the mempool.
+# Confirmed rows are read from the chain index for this window only.
+# The classified list is not written to disk.
 MEMPOOL_CACHE_SECONDS = 8.0
-# Stop a single page scan so one request cannot walk the whole chain.
-MAX_CANDIDATES_PER_PAGE = 2000
-CANDIDATE_BATCH = 40
+
+
+def et_midnight(now: int | float) -> tuple[int, str]:
+    """Unix time of 12:00 AM ET on the civil day that contains ``now``, plus YYYY-MM-DD.
+
+    ``fold=0`` picks the first instant of that clock time. Midnight itself is
+    not in the repeated hour on a fall-back day, and it exists on a spring-forward day.
+    """
+    moment = datetime.fromtimestamp(int(now), tz=ET)
+    start = moment.replace(hour=0, minute=0, second=0, microsecond=0, fold=0)
+    return int(start.timestamp()), start.date().isoformat()
+
+
+def et_day_window(now: int | float) -> tuple[int, int, str]:
+    """``[start, end)`` unix seconds for the ET civil day containing ``now``.
+
+    ``end`` is the next 12:00 AM ET. Adding 26 hours clears both a 23-hour
+    spring-forward day and a 25-hour fall-back day before snapping to midnight.
+    """
+    start, key = et_midnight(now)
+    end, _ = et_midnight(start + 26 * 3600)
+    return start, end, key
 
 
 def parse_proceeds(value: Any, *, fallback: bool = True) -> tuple[str, ...]:
@@ -360,6 +391,10 @@ class TradeFeed:
         self.cache_seconds = cache_seconds
         self._lock = threading.Lock()
         self._mem: tuple[float, tuple, list[dict]] | None = None
+        # In-memory only. Never written to sqlite.
+        self._day_key: str | None = None
+        self._day_trades: list[dict] = []
+        self._day_built: float = 0.0
 
     def tip_height(self) -> int:
         tip = None
@@ -445,28 +480,6 @@ class TradeFeed:
     def _proceeds_sql(self) -> tuple[str, list[str]]:
         marks = ",".join("?" * len(self.proceeds))
         return marks, list(self.proceeds)
-
-    def _candidate_batch(self, before_height: int | None, before_n: int | None, limit: int) -> list[dict]:
-        if not self.proceeds:
-            return []
-        marks, params = self._proceeds_sql()
-        sql = f"""
-            SELECT t.txid, t.height, t.n, t.time, t.fee, t.coinbase
-            FROM txs t
-            WHERE t.coinbase = 0
-              AND EXISTS (
-                SELECT 1 FROM txio i
-                WHERE i.txid = t.txid AND i.address IN ({marks})
-              )
-        """
-        args: list[Any] = list(params)
-        if before_height is not None:
-            n = 0 if before_n is None else int(before_n)
-            sql += " AND (t.height < ? OR (t.height = ? AND t.n < ?))"
-            args.extend([int(before_height), int(before_height), n])
-        sql += " ORDER BY t.height DESC, t.n DESC LIMIT ?"
-        args.append(int(limit))
-        return [dict(row) for row in self.db.conn.execute(sql, args).fetchall()]
 
     def _load_views(self, metas: list[dict]) -> dict[str, dict]:
         if not metas:
@@ -557,119 +570,19 @@ class TradeFeed:
             self._mem = (clock, key, trades)
         return trades
 
-    def _one_txid(self, txid: str) -> dict | None:
-        row = self.db.conn.execute(
-            "SELECT txid, height, n, time, fee, coinbase FROM txs WHERE txid=?",
-            (txid,),
-        ).fetchone()
-        if not row:
-            row = self.db.conn.execute(
-                "SELECT txid, height, n, time, fee, coinbase FROM txs WHERE txid=?",
-                (txid.lower(),),
-            ).fetchone()
-        if not row or row["coinbase"]:
-            return None
-        meta = dict(row)
-        view = self._load_views([meta]).get(meta["txid"])
-        if not view:
-            return None
-        base = classify_launch_trade(view, self.proceeds)
-        if not base:
-            return None
-        return self._decorate(base, view, self._handles([base["trader"]]))
+    def _begin_day(self, now: int) -> tuple[int, int, str]:
+        """Drop yesterday's in-memory trades when the ET date changes."""
+        start, end, key = et_day_window(now)
+        with self._lock:
+            if self._day_key != key:
+                self._day_key = key
+                self._day_trades = []
+                self._day_built = 0.0
+                self._mem = None
+        return start, end, key
 
-    def confirmed_page(
-        self,
-        *,
-        side: str,
-        q: str,
-        handle_addrs: set[str],
-        before_height: int | None,
-        before_n: int | None,
-        limit: int,
-    ) -> tuple[list[dict], bool, int | None, int | None]:
-        items: list[dict] = []
-        cursor_h = before_height
-        cursor_n = before_n
-        scanned = 0
-        stopped_early = False
-        while len(items) < limit and scanned < MAX_CANDIDATES_PER_PAGE:
-            batch = self._candidate_batch(cursor_h, cursor_n, CANDIDATE_BATCH)
-            if not batch:
-                break
-            scanned += len(batch)
-            views = self._load_views(batch)
-            classified = []
-            for meta in batch:
-                view = views.get(meta["txid"])
-                if not view:
-                    continue
-                base = classify_launch_trade(view, self.proceeds)
-                if base:
-                    classified.append((meta, view, base))
-            handles = self._handles([base["trader"] for _, _, base in classified]) if classified else {}
-            for meta, view, base in classified:
-                trade = self._decorate(base, view, handles)
-                if self._match(trade, side, q, handle_addrs):
-                    items.append(trade)
-                    if len(items) >= limit:
-                        stopped_early = True
-                        break
-            if stopped_early:
-                break
-            tail = batch[-1]
-            cursor_h = int(tail["height"])
-            cursor_n = int(tail["n"])
-            if len(batch) < CANDIDATE_BATCH:
-                break
-        if not items:
-            hit_cap = scanned >= MAX_CANDIDATES_PER_PAGE and cursor_h is not None
-            return [], hit_cap, cursor_h, cursor_n
-        last = items[-1]
-        next_h = int(last["height"]) if last.get("height") is not None else cursor_h
-        next_n = last.get("n") if last.get("n") is not None else cursor_n
-        if stopped_early and next_h is not None and next_n is not None:
-            has_more = bool(self._candidate_batch(int(next_h), int(next_n), 1))
-        elif scanned >= MAX_CANDIDATES_PER_PAGE and cursor_h is not None:
-            has_more = True
-            next_h = cursor_h
-            next_n = cursor_n
-        else:
-            has_more = False
-        return items, has_more, next_h, next_n
-
-    def stats(self, *, now: int | None = None, pending: list[dict] | None = None) -> dict:
-        moment = int(time.time() if now is None else now)
-        pending_rows = self.mempool_trades() if pending is None else pending
-        hour = moment - 3600
-        day = moment - 86400
-        confirmed = self._trades_since(day)
-        seen = {t["txid"] for t in confirmed}
-        hour_n = 0
-        volume = 0
-        for trade in confirmed:
-            when = trade.get("time") or 0
-            if when >= hour:
-                hour_n += 1
-            if when >= day:
-                volume += int(trade.get("xfer_atoms") or 0)
-        for trade in pending_rows:
-            if trade.get("txid") in seen:
-                continue
-            when = trade.get("time") or moment
-            if when >= hour:
-                hour_n += 1
-            if when >= day:
-                volume += int(trade.get("xfer_atoms") or 0)
-        height = self.tip_height()
-        return {
-            "height": height if height >= 0 else None,
-            "pending": len(pending_rows),
-            "trades_last_hour": hour_n,
-            "volume_24h_atoms": volume,
-        }
-
-    def _trades_since(self, since: int) -> list[dict]:
+    def _trades_between(self, start: int, end: int) -> list[dict]:
+        """Read chain rows in ``[start, end)``. Does not write a trade table."""
         if not self.proceeds:
             return []
         marks, params = self._proceeds_sql()
@@ -677,14 +590,14 @@ class TradeFeed:
             f"""
             SELECT t.txid, t.height, t.n, t.time, t.fee, t.coinbase
             FROM txs t
-            WHERE t.coinbase = 0 AND t.time >= ?
+            WHERE t.coinbase = 0 AND t.time >= ? AND t.time < ?
               AND EXISTS (
                 SELECT 1 FROM txio i
                 WHERE i.txid = t.txid AND i.address IN ({marks})
               )
             ORDER BY t.height DESC, t.n DESC
             """,
-            [since, *params],
+            [start, end, *params],
         ).fetchall()
         metas = [dict(r) for r in rows]
         views = self._load_views(metas)
@@ -693,80 +606,101 @@ class TradeFeed:
             view = views.get(meta["txid"])
             if not view:
                 continue
+            when = int(view.get("time") or 0)
+            if when < start or when >= end:
+                continue
             base = classify_launch_trade(view, self.proceeds)
             if base:
                 found.append((view, base))
         handles = self._handles([base["trader"] for _, base in found])
         return [self._decorate(base, view, handles) for view, base in found]
 
+    def today_confirmed(self, now: int) -> list[dict]:
+        start, end, key = self._begin_day(now)
+        mono = time.monotonic()
+        with self._lock:
+            if self._day_key == key and self._day_built and mono - self._day_built < self.cache_seconds:
+                return list(self._day_trades)
+        trades = self._trades_between(start, end)
+        with self._lock:
+            if self._day_key != key:
+                # Midnight passed while the chain was being read. Don't keep the old day.
+                return []
+            self._day_trades = trades
+            self._day_built = time.monotonic()
+        return list(trades)
+
+    def _pending_today(self, now: int, start: int, end: int) -> list[dict]:
+        rows = []
+        for trade in self.mempool_trades():
+            when = trade.get("time")
+            if when is None:
+                when = now
+            try:
+                when_i = int(when)
+            except (TypeError, ValueError):
+                when_i = now
+            if start <= when_i < end:
+                rows.append(trade)
+        return rows
+
+    def stats(self, *, now: int | None = None, pending: list[dict] | None = None) -> dict:
+        moment = int(time.time() if now is None else now)
+        start, end, key = et_day_window(moment)
+        confirmed = self.today_confirmed(moment)
+        pending_rows = self._pending_today(moment, start, end) if pending is None else pending
+        seen = {t["txid"] for t in confirmed}
+        volume = 0
+        count = 0
+        for trade in confirmed:
+            count += 1
+            volume += int(trade.get("xfer_atoms") or 0)
+        for trade in pending_rows:
+            if trade.get("txid") in seen:
+                continue
+            count += 1
+            volume += int(trade.get("xfer_atoms") or 0)
+        return {
+            "trades_today": count,
+            "volume_today_atoms": volume,
+            "pending": len(pending_rows),
+            "day_start": start,
+            "day": key,
+        }
+
     def page(
         self,
         *,
         side: str = "all",
         q: str = "",
-        before_height: int | None = None,
-        before_n: int | None = None,
-        limit: int = 25,
         now: int | None = None,
     ) -> dict:
-        limit = paginate(limit, 25, 50)
+        """Today's Launch trades, newest first. No history before 12:00 AM ET."""
+        moment = int(time.time() if now is None else now)
+        start, end, key = self._begin_day(moment)
         side = side if side in ("buy", "sell") else "all"
         query = (q or "").strip()[:200]
-        handle_addrs = self._handle_addresses(query) if query.startswith("@") or query else set()
-        if query and not query.startswith("@") and not query[:1].isdigit():
-            # A bare handle still resolves when an identity exists.
-            extra = self._handle_addresses(query)
-            if extra:
-                handle_addrs |= extra
-        pending = self.mempool_trades()
+        handle_addrs: set[str] = set()
+        if query:
+            handle_addrs = self._handle_addresses(query)
+        pending = self._pending_today(moment, start, end)
+        confirmed = self.today_confirmed(moment)
         items: list[dict] = []
-        if before_height is None:
-            for trade in pending:
-                if self._match(trade, side, query, handle_addrs):
-                    items.append(trade)
-                if len(items) >= limit:
-                    break
-        txid_only = len(query) == 64 and all(c in "0123456789abcdefABCDEF" for c in query)
-        confirmed: list[dict] = []
-        has_more = False
-        next_h = None
-        next_n = None
-        if txid_only:
-            one = self._one_txid(query)
-            if one and self._match(one, side, query, handle_addrs):
-                if before_height is None and one["txid"] not in {t["txid"] for t in items}:
-                    confirmed = [one]
-        else:
-            room = max(0, limit - len(items)) if before_height is None else limit
-            if room > 0:
-                confirmed, has_more, next_h, next_n = self.confirmed_page(
-                    side=side,
-                    q=query,
-                    handle_addrs=handle_addrs,
-                    before_height=before_height,
-                    before_n=before_n,
-                    limit=room,
-                )
-            elif before_height is None:
-                # Page is full of unconfirmed trades. Older confirmed rows still exist.
-                probe = self._candidate_batch(None, None, 1)
-                has_more = bool(probe)
-                if has_more and probe:
-                    tip = self.tip_height()
-                    next_h = (tip if tip >= 0 else 0) + 1
-                    next_n = 0
-        if before_height is None:
-            seen = {t["txid"] for t in items}
-            for trade in confirmed:
-                if trade["txid"] not in seen:
-                    items.append(trade)
-        else:
-            items.extend(confirmed)
+        seen: set[str] = set()
+        for trade in list(pending) + list(confirmed):
+            txid = trade.get("txid") or ""
+            if txid in seen:
+                continue
+            if not self._match(trade, side, query, handle_addrs):
+                continue
+            seen.add(txid)
+            items.append(trade)
         return {
             "items": items,
-            "stats": self.stats(now=now, pending=pending),
-            "has_more": has_more,
-            "next_before": next_h,
-            "next_before_n": next_n,
+            "stats": self.stats(now=moment, pending=pending),
+            "has_more": False,
+            "day_start": start,
+            "day_end": end,
+            "day": key,
             "proceeds": list(self.proceeds),
         }

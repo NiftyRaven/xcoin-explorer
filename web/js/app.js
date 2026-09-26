@@ -1544,14 +1544,12 @@ function tradesHash(side, q) {
   return "#/trades" + (qs ? "?" + qs : "");
 }
 
-function tradeQuery(side, q, before, beforeN) {
+function tradeQuery(side, q) {
   const p = new URLSearchParams();
   if (side && side !== "all") p.set("side", side);
   if (q) p.set("q", q);
-  if (before != null && before !== "") p.set("before", String(before));
-  if (beforeN != null && beforeN !== "") p.set("before_n", String(beforeN));
-  p.set("limit", "25");
-  return "/trades?" + p.toString();
+  const qs = p.toString();
+  return "/trades" + (qs ? "?" + qs : "");
 }
 
 function tradeWho(t) {
@@ -1623,12 +1621,10 @@ function tradeCard(t, extra) {
 
 function tradeStatsHtml(s) {
   const stats = s || {};
-  const height = stats.height != null && stats.height >= 0 ? Number(stats.height).toLocaleString() : "—";
   return `<div class="grid stats" id="trade-stats">
-    <div class="card stat"><span>Latest block</span><b>${height}</b></div>
-    <div class="card stat"><span>Pending trades</span><b>${stats.pending ?? 0}</b></div>
-    <div class="card stat"><span>Trades last hour</span><b>${stats.trades_last_hour ?? 0}</b></div>
-    <div class="card stat"><span>24h XFER volume</span><b>${atomsToXfer(stats.volume_24h_atoms)}</b></div>
+    <div class="card stat"><span>Trades today</span><b>${stats.trades_today ?? 0}</b></div>
+    <div class="card stat"><span>XFER volume today</span><b>${atomsToXfer(stats.volume_today_atoms)}</b></div>
+    <div class="card stat"><span>Pending</span><b>${stats.pending ?? 0}</b></div>
   </div>`;
 }
 
@@ -1638,9 +1634,7 @@ function renderTradeList() {
   const items = tradeView.items || [];
   list.innerHTML = items.length
     ? items.map((t) => tradeCard(t)).join("")
-    : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet."}</div></div>`;
-  const more = $("#trade-more");
-  if (more) more.hidden = !tradeView.hasMore;
+    : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet today."}</div></div>`;
 }
 
 function htmlToNode(html) {
@@ -1657,9 +1651,19 @@ async function refreshTradeHead() {
     const data = await api(tradeQuery(tradeView.side, tradeView.q));
     const stats = $("#trade-stats");
     if (stats) stats.outerHTML = tradeStatsHtml(data.stats);
-    const seen = new Map((tradeView.items || []).map((t) => [t.txid, t]));
+    const incoming = data.items || [];
+    const incomingIds = new Set(incoming.map((t) => t.txid));
+    // Midnight ET drops yesterday. The server list is the whole day, so remove cards it no longer returns.
+    for (const prev of tradeView.items || []) {
+      if (!incomingIds.has(prev.txid)) {
+        const el = document.getElementById("trade-" + prev.txid);
+        if (el) el.remove();
+      }
+    }
+    tradeView.items = (tradeView.items || []).filter((t) => incomingIds.has(t.txid));
+    const seen = new Map(tradeView.items.map((t) => [t.txid, t]));
     const fresh = [];
-    for (const t of data.items || []) {
+    for (const t of incoming) {
       const prev = seen.get(t.txid);
       if (!prev) {
         fresh.push(t);
@@ -1672,7 +1676,9 @@ async function refreshTradeHead() {
         if (el && node) el.replaceWith(node);
       }
     }
-    if (fresh.length) {
+    if (!(tradeView.items || []).length && !fresh.length) {
+      renderTradeList();
+    } else if (fresh.length) {
       tradeView.items = fresh.concat(tradeView.items || []);
       const list = $("#trade-list");
       const empty = list && list.querySelector(".empty");
@@ -1703,10 +1709,10 @@ async function pageTrades() {
   const params = hashQuery();
   const side = params.get("side") === "buy" || params.get("side") === "sell" ? params.get("side") : "all";
   const q = (params.get("q") || "").trim();
-  tradeView = { side, q, items: [], hasMore: false, nextBefore: null, nextBeforeN: null };
+  tradeView = { side, q, items: [] };
   app.innerHTML = `
     <h1 class="page-title">Trades</h1>
-    <p class="sub">Every Launch buy and sell, newest first. Search an asset, @handle, address, or transaction. Confirmed means the trade is locked into the chain.</p>
+    <p class="sub">Showing today's trades since 12:00 AM ET. Older trades are still on the chain; open any tx, block or address to see them. Confirmed means the trade is locked into the chain.</p>
     <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
     <div class="toolbar">
       <div class="tabs" id="trade-tabs">
@@ -1719,10 +1725,7 @@ async function pageTrades() {
         <button type="submit">Filter</button>
       </form>
     </div>
-    <div class="trade-list" id="trade-list"><div class="card"><div class="loading">Loading trades…</div></div></div>
-    <div class="row-actions">
-      <button type="button" class="btn" id="trade-more" hidden>Load older</button>
-    </div>`;
+    <div class="trade-list" id="trade-list"><div class="card"><div class="loading">Loading trades…</div></div></div>`;
   document.querySelectorAll("#trade-tabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
       const next = btn.getAttribute("data-side") || "all";
@@ -1738,38 +1741,9 @@ async function pageTrades() {
       location.hash = tradesHash(side, typed);
     });
   }
-  const more = $("#trade-more");
-  if (more) {
-    more.addEventListener("click", async () => {
-      if (!tradeView || !tradeView.hasMore) return;
-      more.disabled = true;
-      try {
-        const data = await api(tradeQuery(tradeView.side, tradeView.q, tradeView.nextBefore, tradeView.nextBeforeN));
-        const seen = new Set((tradeView.items || []).map((t) => t.txid));
-        const older = (data.items || []).filter((t) => !seen.has(t.txid));
-        tradeView.items = (tradeView.items || []).concat(older);
-        tradeView.hasMore = !!data.has_more;
-        tradeView.nextBefore = data.next_before;
-        tradeView.nextBeforeN = data.next_before_n;
-        const list = $("#trade-list");
-        if (list && older.length) {
-          list.insertAdjacentHTML("beforeend", older.map((t) => tradeCard(t)).join(""));
-        }
-        more.hidden = !tradeView.hasMore;
-      } catch (e) {
-        const list = $("#trade-list");
-        if (list) list.insertAdjacentHTML("beforeend", `<div class="card"><p class="err">${esc(e.message || "Could not load older trades.")}</p></div>`);
-      } finally {
-        more.disabled = false;
-      }
-    });
-  }
   try {
     const data = await api(tradeQuery(side, q));
     tradeView.items = data.items || [];
-    tradeView.hasMore = !!data.has_more;
-    tradeView.nextBefore = data.next_before;
-    tradeView.nextBeforeN = data.next_before_n;
     const slot = $("#trade-stats-slot");
     if (slot) slot.innerHTML = tradeStatsHtml(data.stats);
     renderTradeList();

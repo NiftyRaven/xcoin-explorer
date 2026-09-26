@@ -305,21 +305,9 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         return {"items": queries.rich_list(limit)}
 
     @app.get("/api/trades")
-    def trades(
-        side: str = "all",
-        q: str = "",
-        before: int | None = None,
-        before_n: int | None = None,
-        limit: int = 25,
-    ):
-        """Public Launch buys and sells, newest first. Confirmed rows come from the index."""
-        return app.state.trades.page(
-            side=side,
-            q=q,
-            before_height=before,
-            before_n=before_n,
-            limit=limit,
-        )
+    def trades(side: str = "all", q: str = ""):
+        """Launch buys and sells since 12:00 AM America/New_York. Not stored as history."""
+        return app.state.trades.page(side=side, q=q)
 
     @app.get("/api/mempool")
     def mempool():
