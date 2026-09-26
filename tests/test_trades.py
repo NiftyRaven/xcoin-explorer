@@ -1020,6 +1020,9 @@ def test_xcoin_stream_listing_reserve_and_delivery(tmp_path: Path):
         assert trade["asset_atoms"] == row["asset_atoms"]
         assert trade["fee_atoms"] == row["fee_atoms"]
         assert trade["tokens_pending"] is False
+        assert trade["trader"] == doc["buyer"]
+    assert {row["txid"][:8] for row in sells} == {"da0292ce", "d7037a58"}
+    assert doc["buyer"] == "Xi3UpFEU3nx9uqKB2sRxCUE9ur7PMoexoy"
 
     db = Database(tmp_path / "stream.db")
     now = int(time.time())
@@ -1050,6 +1053,7 @@ def test_xcoin_stream_listing_reserve_and_delivery(tmp_path: Path):
     for row in sells:
         assert shown[row["txid"]]["side"] == "sell"
         assert shown[row["txid"]]["confirmed"] is True
+        assert shown[row["txid"]]["trader"] == doc["buyer"]
     saved = db.conn.execute(
         "SELECT address FROM launch_reserves WHERE asset=?", (doc["asset"],)
     ).fetchone()
@@ -1163,6 +1167,158 @@ def test_sell_learns_reserve_from_an_earlier_verified_buy(tmp_path: Path):
         "SELECT address FROM launch_reserves WHERE asset=?", (asset,)
     ).fetchone()
     assert saved["address"] == reserve
+    db.close()
+
+
+def test_first_verified_reserve_is_not_replaced(tmp_path: Path):
+    """A later buy, even one the treasury delivers, does not redirect the reserve."""
+    asset = "LAUNCH_XFER/WIDGET"
+    first = "XwidgetReserve111111111111111111111"
+    forged = "XforgedReserve22222222222222222222"
+    treasury = LAUNCH_TREASURY
+    db = Database(tmp_path / "keep-first.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    db.conn.execute(
+        "INSERT INTO assets(name, kind, units) VALUES(?, 'sub', 4)",
+        (asset,),
+    )
+
+    def fill(height, nout, reserve, net, tokens, atoms, txid):
+        gross = net * 10_000 // 9910
+        platform = gross * 60 // 10_000
+        fee = COIN
+        buy = tx(
+            [leg(BUYER, gross + fee)],
+            [
+                leg(treasury, platform),
+                leg(reserve, net),
+                leg(BUYER, gross + fee - platform - net - fee),
+                _memo_vout(f"XL1|B|WIDGET|{net}|{tokens}"),
+            ],
+            height=height,
+            txid=txid,
+        )
+        delivery = tx(
+            [leg(treasury, 0, asset, atoms)],
+            [leg(BUYER, 0, asset, atoms)],
+            height=height,
+            txid="d" + txid[1:],
+        )
+        store_tx(db, buy, n=nout, when=start + height, txid=buy["txid"])
+        store_tx(db, delivery, n=nout + 1, when=start + height, txid=delivery["txid"])
+        return buy
+
+    fill(10, 1, first, 9_910_000_000, 1_500_000, 15_000_000_000, "a1" * 32)
+    fill(11, 1, forged, 19_820_000_000, 2_000_000, 20_000_000_000, "a2" * 32)
+    payout = 40 * COIN
+    kept = tx(
+        [leg(SELLER, 0, asset, 15_000_000_000), leg(first, payout + 4 * COIN)],
+        [
+            leg(treasury, 0, asset, 15_000_000_000),
+            leg(SELLER, payout),
+            leg(first, 4 * COIN),
+            _memo_vout(f"XL1|S|WIDGET|{payout}|1500000"),
+        ],
+        height=12,
+        txid="e1" * 32,
+    )
+    redirected = tx(
+        [leg(SELLER, 0, asset, 20_000_000_000), leg(forged, 50 * COIN)],
+        [
+            leg(treasury, 0, asset, 20_000_000_000),
+            leg(SELLER, 50 * COIN),
+            _memo_vout(f"XL1|S|WIDGET|{50 * COIN}|2000000"),
+        ],
+        height=13,
+        txid="e2" * 32,
+    )
+    store_tx(db, kept, n=1, when=start + 40, txid=kept["txid"])
+    store_tx(db, redirected, n=1, when=start + 50, txid=redirected["txid"])
+    db.commit()
+    feed = TradeFeed(db, None, None, cache_seconds=0)
+    shown = {item["txid"]: item for item in feed.page(now=start + 80)["items"]}
+    assert shown[kept["txid"]]["side"] == "sell"
+    assert shown[kept["txid"]]["trader"] == SELLER
+    assert redirected["txid"] not in shown
+    saved = db.conn.execute("SELECT address, txid FROM launch_reserves WHERE asset=?", (asset,)).fetchone()
+    assert saved["address"] == first
+    assert saved["txid"] == "a1" * 32
+    db.close()
+
+
+def test_unknown_asset_sell_does_not_rescan_or_fetch_blocks(tmp_path: Path):
+    """A sell memo with no known reserve is looked up once, then not again.
+
+    An asset the index has never seen does not scan op_return or fetch blocks.
+    """
+    asset = "LAUNCH_XFER/WIDGET"
+    reserve = "XwidgetReserve111111111111111111111"
+    treasury = LAUNCH_TREASURY
+    payout = 40 * COIN
+    atoms = 15_000_000_000
+    tokens = 1_500_000
+    db = Database(tmp_path / "miss.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    sell = tx(
+        [leg(SELLER, 0, asset, atoms), leg(reserve, payout + 4 * COIN)],
+        [
+            leg(treasury, 0, asset, atoms),
+            leg(SELLER, payout),
+            leg(reserve, 4 * COIN),
+            _memo_vout(f"XL1|S|WIDGET|{payout}|{tokens}"),
+        ],
+        height=8,
+        txid="e1" * 32,
+    )
+    store_tx(db, sell, n=1, when=start + 30, txid=sell["txid"])
+    db.commit()
+    rpc = FakeRPC()
+    feed = TradeFeed(db, rpc, None, cache_seconds=0)
+    assert sell["txid"] not in {item["txid"] for item in feed.page(now=start + 40)["items"]}
+    assert "getblock" not in rpc.methods
+    assert "getblockhash" not in rpc.methods
+
+    db.conn.execute(
+        "INSERT INTO assets(name, kind, units) VALUES(?, 'sub', 4)",
+        (asset,),
+    )
+    db.commit()
+    missed = TradeFeed(db, rpc, None, cache_seconds=0)
+    assert sell["txid"] not in {item["txid"] for item in missed.page(now=start + 40)["items"]}
+    assert "getblock" not in rpc.methods
+    net = 9_910_000_000
+    gross = 100 * COIN
+    platform = 60_000_000
+    buy = tx(
+        [leg(BUYER, gross + COIN)],
+        [
+            leg(treasury, platform),
+            leg(reserve, net),
+            leg(BUYER, gross + COIN - platform - net - COIN),
+            _memo_vout(f"XL1|B|WIDGET|{net}|{tokens}"),
+        ],
+        height=4,
+        txid="b1" * 32,
+    )
+    delivery = tx(
+        [leg(treasury, 0, asset, atoms)],
+        [leg(BUYER, 0, asset, atoms)],
+        height=4,
+        txid="d1" * 32,
+    )
+    store_tx(db, buy, n=1, when=start - 500, txid=buy["txid"])
+    store_tx(db, delivery, n=2, when=start - 490, txid=delivery["txid"])
+    db.commit()
+    again = {item["txid"] for item in missed.page(now=start + 40)["items"]}
+    assert sell["txid"] not in again
+    assert "getblock" not in rpc.methods
+    fresh = TradeFeed(db, rpc, None, cache_seconds=0)
+    shown = {item["txid"]: item for item in fresh.page(now=start + 40)["items"]}
+    assert shown[sell["txid"]]["side"] == "sell"
+    assert shown[sell["txid"]]["trader"] == SELLER
+    assert "getblock" not in rpc.methods
     db.close()
 
 
