@@ -25,6 +25,7 @@ from explorer.decode import (
 )
 from explorer.hostshare import detect_host_share
 from explorer.rpc import RpcError, XCoinRPC
+from explorer.trades import _memo_text, decode_fill_memo, et_day_window
 
 # Bump to force a full XVA1 rebuild of lottery_wins / lottery_active.
 LOTTERY_INDEX_V = "4"
@@ -38,6 +39,23 @@ def _atoms(value: Any) -> int:
     if isinstance(value, int):
         return value
     return xfer_to_atoms(value)
+
+
+def _units_in_block(block: dict, txid: str, name: str) -> int | None:
+    """Decimal places from the issue output, preferring the script over a null RPC units field."""
+    for tx in block.get("tx") or []:
+        if not isinstance(tx, dict) or tx.get("txid") != txid:
+            continue
+        for vout in tx.get("vout") or []:
+            spk = vout.get("scriptPubKey") or {}
+            parsed = parse_vout_script(spk.get("hex") or "")
+            asset = parsed.get("asset") if isinstance(parsed.get("asset"), dict) else {}
+            if asset.get("name") == name and asset.get("units") not in (None, 0):
+                return int(asset["units"])
+            rpc_asset = spk.get("asset") if isinstance(spk.get("asset"), dict) else None
+            if rpc_asset and rpc_asset.get("name") == name and rpc_asset.get("units") not in (None, 0):
+                return int(rpc_asset["units"])
+    return None
 
 
 class Indexer:
@@ -161,6 +179,118 @@ class Indexer:
         self.status["indexed"] = self.db.indexed_height()
         self.status["error"] = ""
         self.status["indexing"] = self.status["indexed"] < tip
+        self._backfill_today_fill_scripts()
+
+    def _backfill_today_fill_scripts(self) -> None:
+        """Fill NULL ``op_return`` on today's non-coinbase outputs, and asset units those memos need.
+
+        New blocks already store the payload while they are indexed. Rows
+        written before the column existed stay NULL until this reads the
+        same block from the node and updates that column. Older days are
+        left alone. Nothing is deleted.
+        """
+        if not getattr(self.rpc, "connected", False):
+            return
+        start, end, _key = et_day_window(time.time())
+        self._fill_null_op_returns(start, end)
+        self._fill_memo_asset_units(start, end)
+
+    def _fill_null_op_returns(self, start: int, end: int) -> None:
+        rows = self.db.conn.execute(
+            """
+            SELECT t.txid, t.height, i.n
+            FROM txio i
+            JOIN txs t ON t.txid = i.txid
+            WHERE t.coinbase = 0 AND t.time >= ? AND t.time < ?
+              AND i.direction = 'out' AND i.script_type = 'nulldata'
+              AND i.op_return IS NULL AND t.height IS NOT NULL
+            """,
+            (start, end),
+        ).fetchall()
+        pending: dict[int, dict[str, list[int]]] = {}
+        for row in rows:
+            pending.setdefault(int(row["height"]), {}).setdefault(row["txid"], []).append(int(row["n"]))
+        # A caught-up node can have a full day of ordinary OP_RETURN txs.
+        # Spread the block reads so one tick does not re-walk the chain.
+        for height in sorted(pending)[:40]:
+            try:
+                block_hash = self.rpc.call("getblockhash", height)
+                block = self.rpc.call("getblock", block_hash, 2)
+            except RpcError:
+                continue
+            if not isinstance(block, dict):
+                continue
+            by_id = {}
+            for tx in block.get("tx") or []:
+                if isinstance(tx, dict) and tx.get("txid"):
+                    by_id[tx["txid"]] = tx
+            for txid, ns in pending[height].items():
+                raw = by_id.get(txid)
+                if not isinstance(raw, dict):
+                    continue
+                vouts = {int(v.get("n") or 0): v for v in (raw.get("vout") or [])}
+                for n in ns:
+                    vout = vouts.get(n) or {}
+                    spk = vout.get("scriptPubKey") or {}
+                    parsed = parse_vout_script(spk.get("hex") or "")
+                    payload = parsed.get("op_return")
+                    self.db.conn.execute(
+                        """
+                        UPDATE txio SET op_return=?
+                        WHERE txid=? AND n=? AND direction='out' AND op_return IS NULL
+                        """,
+                        ("" if payload is None else payload, txid, n),
+                    )
+        if pending:
+            self.db.commit()
+
+    def _fill_memo_asset_units(self, start: int, end: int) -> None:
+        """Read an issue script once when today's memo names an asset stored with units 0.
+
+        The node often reports ``units`` as null on a transfer, and an older
+        index then stored 0. Buys scale the memo's token count by this value.
+        """
+        rows = self.db.conn.execute(
+            """
+            SELECT i.op_return FROM txio i
+            JOIN txs t ON t.txid = i.txid
+            WHERE t.time >= ? AND t.time < ? AND i.op_return IS NOT NULL AND i.op_return != ''
+            """,
+            (start, end),
+        ).fetchall()
+        names: set[str] = set()
+        for row in rows:
+            text = _memo_text({"op_return": row["op_return"]})
+            memo = decode_fill_memo(text) if text else None
+            if memo:
+                names.add(memo["asset"])
+        changed = False
+        for name in names:
+            asset = self.db.conn.execute(
+                "SELECT units, created_txid, created_height FROM assets WHERE name=?",
+                (name,),
+            ).fetchone()
+            if not asset or int(asset["units"] or 0) > 0:
+                continue
+            height = asset["created_height"]
+            created = asset["created_txid"]
+            if height is None or not created:
+                continue
+            try:
+                block_hash = self.rpc.call("getblockhash", int(height))
+                block = self.rpc.call("getblock", block_hash, 2)
+            except RpcError:
+                continue
+            units = _units_in_block(block if isinstance(block, dict) else {}, created, name)
+            if units is None or int(units) <= 0:
+                continue
+            self.db.conn.execute(
+                "UPDATE assets SET units=? WHERE name=? AND (units IS NULL OR units=0)",
+                (int(units), name),
+            )
+            changed = True
+        if changed:
+            self.db.commit()
 
     def _rebuild_lottery_from_xva(self) -> None:
         """Re-read coinbases so history/leaderboard use XVA1 handles, not live peers."""

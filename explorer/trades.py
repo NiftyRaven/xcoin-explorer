@@ -11,6 +11,12 @@ client here, so a trade is recognized from the chain:
 The known proceeds address is the default. ``explorer.toml`` ``[launch]``
 or ``XFER_LAUNCH_PROCEEDS`` replaces that list.
 
+An ``XL1`` memo is not enough on its own. The Launch side of that fill
+must be a configured Launch address: the buy's curve-net output is paid
+to one, and a sell both delivers the asset to one and spends the XFER
+payout from one (that address is an input). A self-send that copies the
+memo is not a trade.
+
 The public page shows only the current America/New_York civil day, from
 12:00 AM. Classified trades are kept in memory and dropped at the next
 midnight. This page does not write a trade history table.
@@ -251,6 +257,39 @@ def _infer_units(tokens: int, moved: int) -> int | None:
     return None
 
 
+def _launch_output(tx: dict, amount: int, allowed: set[str]) -> str | None:
+    """Address of one Launch output that pays exactly ``amount`` XFER atoms."""
+    for row in tx.get("vout") or []:
+        addr = row.get("address")
+        if addr in allowed and _atoms(row.get("value")) == amount:
+            return addr
+    return None
+
+
+def _xfer_spent(tx: dict) -> dict[str, int]:
+    """XFER atoms each address put in, minus the XFER it took back as change."""
+    entered: dict[str, int] = {}
+    left: dict[str, int] = {}
+    for row in tx.get("vin") or []:
+        _add(entered, row.get("address"), _atoms(row.get("value")))
+    for row in tx.get("vout") or []:
+        _add(left, row.get("address"), _atoms(row.get("value")))
+    spent: dict[str, int] = {}
+    for addr in set(entered) | set(left):
+        delta = entered.get(addr, 0) - left.get(addr, 0)
+        if delta:
+            spent[addr] = delta
+    return spent
+
+
+def _asset_from_launch(tx: dict, name: str, allowed: set[str]) -> int:
+    total = 0
+    for row in tx.get("vin") or []:
+        if row.get("address") in allowed and (row.get("asset") or "") == name:
+            total += int(row.get("asset_amount") or 0)
+    return total
+
+
 def _trade_from_memo(
     memo: dict,
     tx: dict,
@@ -258,8 +297,19 @@ def _trade_from_memo(
     asset_net: dict[str, dict[str, int]],
     fee: int,
     asset_units: dict | None,
+    allowed: set[str],
 ) -> dict | None:
-    """One Launch fill marked with XL1. Extra fee and change outputs are allowed."""
+    """One Launch fill marked with XL1. Extra fee and change outputs are allowed.
+
+    The memo is ignored unless a configured Launch address is on the Launch
+    side. Buys must pay ``net_atoms`` to one. If this tx also delivers the
+    asset, those tokens must come from a Launch input (real buys deliver
+    them later, from the treasury, so an XFER-only payment still counts).
+    Sells must deliver the asset to a Launch address and spend the memo's
+    XFER payout from a Launch input.
+    """
+    if not allowed:
+        return None
     name = memo["asset"]
     moved = [(addr, nets.get(name, 0)) for addr, nets in asset_net.items() if nets.get(name, 0)]
     units = None
@@ -281,11 +331,16 @@ def _trade_from_memo(
 
     if memo["side"] == "buy":
         net = int(memo["net_atoms"])
-        paid_net = any(amount == net for amount in xfer_net.values() if amount > 0)
-        if not paid_net:
-            paid_net = any(_atoms(row.get("value")) == net for row in tx.get("vout") or [])
-        if not paid_net:
+        counterparty = _launch_output(tx, net, allowed)
+        if not counterparty:
             return None
+        # In-tx delivery is optional. When it happens, the tokens have to
+        # leave a Launch address and match the memo. A later treasury
+        # transfer is a separate tx and is not itself a fill.
+        if moved:
+            delivered = any(amount == asset_atoms and addr not in allowed for addr, amount in moved)
+            if not delivered or _asset_from_launch(tx, name, allowed) < asset_atoms:
+                return None
         gross = _buy_gross_atoms(net)
         losses = [(addr, -amount) for addr, amount in xfer_net.items() if amount < 0 and addr]
         if not losses:
@@ -293,24 +348,26 @@ def _trade_from_memo(
         target = gross + fee
         losses.sort(key=lambda item: (abs(item[1] - target), -item[1]))
         trader = losses[0][0]
-        counterparty = next((addr for addr, amount in xfer_net.items() if amount == net and addr), None)
-        if counterparty is None:
-            for row in tx.get("vout") or []:
-                if _atoms(row.get("value")) == net and row.get("address"):
-                    counterparty = row["address"]
-                    break
         xfer_atoms = gross
     else:
         if inferred is None and not any(abs(amount) == asset_atoms for _addr, amount in moved):
+            return None
+        gainers = [addr for addr, amount in moved if amount == asset_atoms and addr in allowed]
+        if not gainers:
+            return None
+        launch_inputs = [row.get("address") for row in (tx.get("vin") or []) if row.get("address") in allowed]
+        if not launch_inputs:
+            return None
+        payout = int(memo["net_atoms"])
+        if not any(addr in allowed and spent == payout for addr, spent in _xfer_spent(tx).items()):
             return None
         losers = [(addr, -amount) for addr, amount in moved if amount < 0 and addr]
         if not losers:
             return None
         exact = [addr for addr, loss in losers if loss == asset_atoms]
         trader = exact[0] if len(exact) == 1 else max(losers, key=lambda item: item[1])[0]
-        gainers = [addr for addr, amount in moved if amount == asset_atoms and addr]
-        counterparty = gainers[0] if gainers else ""
-        xfer_atoms = int(memo["net_atoms"])
+        counterparty = gainers[0]
+        xfer_atoms = payout
 
     if not trader or xfer_atoms <= 0:
         return None
@@ -400,7 +457,9 @@ def classify_launch_trade(
     if len(memos) > 1:
         return None
     if len(memos) == 1:
-        return _trade_from_memo(memos[0], tx, xfer_net, asset_net, fee, asset_units)
+        return _trade_from_memo(
+            memos[0], tx, xfer_net, asset_net, fee, asset_units, allowed
+        )
 
     present = (set(xfer_net) | set(asset_net)) & allowed
     if len(present) != 1:

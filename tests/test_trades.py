@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -684,6 +685,264 @@ def test_real_launch_fills_match_chain_memos():
 
     for row in doc["non_trades"]:
         assert classify_launch_trade(row["tx"], asset_units=units) is None, row["label"]
+
+
+def _memo_vout(text: str):
+    return {
+        "address": None,
+        "value": 0,
+        "asset": None,
+        "asset_amount": 0,
+        "asset_kind": None,
+        "op_return": text,
+    }
+
+
+def test_forged_xl1_buy_self_send_is_not_a_trade():
+    """A copied XL1 buy memo does not count unless the curve-net output pays Launch."""
+    doc = json.loads((ROOT / "tests" / "fixtures" / "launch_real_trades.json").read_text(encoding="utf-8"))
+    units = {"LAUNCH_XFER/MY_TOKEN": doc["units"]}
+    attacker = "XattackerAddress444444444444444444"
+    real = json.loads(json.dumps(doc["trades"][0]["tx"]))
+    assert classify_launch_trade(real, asset_units=units)["side"] == "buy"
+
+    forged = json.loads(json.dumps(real))
+    for vout in forged["vout"]:
+        if vout.get("value") == 594600000000:
+            vout["address"] = attacker
+    assert classify_launch_trade(forged, asset_units=units) is None
+
+    net = 9_910_000_000  # 99.10 XFER, grosses to 100 XFER
+    self_send = tx(
+        [leg(attacker, net + COIN)],
+        [leg(attacker, net), _memo_vout(f"XL1|B|MY_TOKEN|{net}|1000000")],
+    )
+    assert classify_launch_trade(self_send, asset_units=units) is None
+
+    # Tokens moved inside the payment must come from a Launch input.
+    buyer = real["vin"][0]["address"]
+    delivered = json.loads(json.dumps(real))
+    delivered["vin"].append(leg(attacker, 0, "LAUNCH_XFER/MY_TOKEN", 435426510000))
+    delivered["vout"].append(leg(buyer, 0, "LAUNCH_XFER/MY_TOKEN", 435426510000))
+    assert classify_launch_trade(delivered, asset_units=units) is None
+
+
+def test_forged_xl1_sell_without_launch_payout_is_not_a_trade():
+    doc = json.loads((ROOT / "tests" / "fixtures" / "launch_real_trades.json").read_text(encoding="utf-8"))
+    units = {"LAUNCH_XFER/MY_TOKEN": doc["units"]}
+    attacker = "XattackerAddress444444444444444444"
+    launch = set(DEFAULT_LAUNCH_PROCEEDS)
+    sell = next(row for row in doc["trades"] if row["side"] == "sell")
+    real = json.loads(json.dumps(sell["tx"]))
+    assert classify_launch_trade(real, asset_units=units)["side"] == "sell"
+
+    forged = json.loads(json.dumps(real))
+    for row in forged["vin"]:
+        if row.get("address") in launch:
+            row["address"] = attacker
+    assert classify_launch_trade(forged, asset_units=units) is None
+
+    asset = "LAUNCH_XFER/MY_TOKEN"
+    atoms = 15_000_000_000
+    payout = 50 * COIN
+    memo = f"XL1|S|MY_TOKEN|{payout}|1500000"
+    no_launch = tx(
+        [leg(attacker, 0, asset, atoms), leg(attacker, payout + COIN)],
+        [
+            leg(DEFAULT_LAUNCH_PROCEEDS[2], 0, asset, atoms),
+            leg(attacker, payout),
+            _memo_vout(memo),
+        ],
+    )
+    assert classify_launch_trade(no_launch, asset_units=units) is None
+
+
+def test_xl1_memo_with_mismatched_amounts_is_not_a_trade():
+    doc = json.loads((ROOT / "tests" / "fixtures" / "launch_real_trades.json").read_text(encoding="utf-8"))
+    units = {"LAUNCH_XFER/MY_TOKEN": doc["units"]}
+    buy = json.loads(json.dumps(doc["trades"][0]["tx"]))
+    for vout in buy["vout"]:
+        if vout.get("op_return"):
+            vout["op_return"] = "XL1|B|MY_TOKEN|594600000001|43542651"
+    assert classify_launch_trade(buy, asset_units=units) is None
+
+    sell_row = next(row for row in doc["trades"] if row["prefix"] == "ee27c6a8")
+    sell = json.loads(json.dumps(sell_row["tx"]))
+    for vout in sell["vout"]:
+        if vout.get("op_return"):
+            vout["op_return"] = "XL1|S|MY_TOKEN|1|50000000"
+    assert classify_launch_trade(sell, asset_units=units) is None
+
+    tokens = json.loads(json.dumps(sell_row["tx"]))
+    for vout in tokens["vout"]:
+        if vout.get("op_return"):
+            vout["op_return"] = "XL1|S|MY_TOKEN|669554238422|1"
+    assert classify_launch_trade(tokens, asset_units=units) is None
+
+
+def test_two_xl1_memos_are_not_a_trade():
+    doc = json.loads((ROOT / "tests" / "fixtures" / "launch_real_trades.json").read_text(encoding="utf-8"))
+    units = {"LAUNCH_XFER/MY_TOKEN": doc["units"]}
+    buy = json.loads(json.dumps(doc["trades"][0]["tx"]))
+    buy["vout"].append(_memo_vout("XL1|S|MY_TOKEN|669554238422|50000000"))
+    assert classify_launch_trade(buy, asset_units=units) is None
+
+
+def test_op_return_migration_is_additive(tmp_path: Path):
+    """Existing rows stay. The new column is ALTER TABLE ADD COLUMN, not a new database."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE txio (
+            id INTEGER PRIMARY KEY,
+            txid TEXT, n INTEGER, direction TEXT, address TEXT, value INTEGER,
+            asset TEXT, asset_amount INTEGER, asset_kind TEXT,
+            spent_txid TEXT, spent_n INTEGER, coinbase INTEGER, script_type TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO txio(txid, n, direction, address, value, script_type)
+        VALUES('abc', 2, 'out', 'Xkeep', 42, 'nulldata')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    cols = [r["name"] for r in db.conn.execute("PRAGMA table_info(txio)")]
+    assert "op_return" in cols
+    row = db.conn.execute("SELECT txid, n, address, value, op_return FROM txio").fetchone()
+    assert row["txid"] == "abc"
+    assert row["n"] == 2
+    assert row["address"] == "Xkeep"
+    assert row["value"] == 42
+    assert row["op_return"] is None
+    assert db.conn.execute("SELECT COUNT(*) AS c FROM txio").fetchone()["c"] == 1
+    db.close()
+
+    again = Database(path)
+    assert again.conn.execute("SELECT value FROM txio").fetchone()["value"] == 42
+    again.close()
+
+
+def _op_return_hex(text: str) -> str:
+    payload = text.encode()
+    return (bytes([0x6A, len(payload)]) + payload).hex()
+
+
+def _issue_script(name: str, units: int) -> str:
+    raw = name.encode()
+    payload = b"rvn" + b"n" + bytes([len(raw)]) + raw + (0).to_bytes(8, "little") + bytes([units, 1, 0])
+    return (bytes([0xC0, len(payload)]) + payload).hex()
+
+
+class _BlockRPC:
+    def __init__(self, blocks: dict):
+        self.connected = True
+        self.blocks = blocks
+
+    def call(self, method, *args):
+        if method == "getblockhash":
+            return f"h-{args[0]}"
+        if method == "getblock":
+            return self.blocks[int(str(args[0]).removeprefix("h-"))]
+        raise AssertionError(method)
+
+
+def test_today_op_return_backfill_does_not_rebuild_the_database(tmp_path: Path):
+    db = Database(tmp_path / "live.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    memo = "XL1|B|MY_TOKEN|9910000000|720896"
+    today_id = "aa" * 32
+    old_id = "bb" * 32
+    issue_id = "cc" * 32
+    store_tx(
+        db,
+        tx([leg(BUYER, 1)], [leg(PROCEEDS, 1), _memo_vout(None)], txid=today_id, height=50),
+        n=1,
+        when=start + 10,
+        txid=today_id,
+    )
+    # store_tx writes script_type 'script'. The backfill only reads nulldata.
+    db.conn.execute(
+        "UPDATE txio SET script_type='nulldata', op_return=NULL WHERE txid=? AND n=1 AND direction='out'",
+        (today_id,),
+    )
+    store_tx(
+        db,
+        tx([leg(BUYER, 1)], [leg(PROCEEDS, 1), _memo_vout(None)], txid=old_id, height=4),
+        n=0,
+        when=start - 50,
+        txid=old_id,
+    )
+    db.conn.execute(
+        "UPDATE txio SET script_type='nulldata', op_return=NULL WHERE txid=? AND n=1 AND direction='out'",
+        (old_id,),
+    )
+    db.conn.execute(
+        """
+        INSERT INTO assets(name, kind, amount, units, reissuable, created_height, created_txid)
+        VALUES('LAUNCH_XFER/MY_TOKEN', 'sub', 1, 0, 1, 3, ?)
+        """,
+        (issue_id,),
+    )
+    db.commit()
+    before_txs = db.conn.execute("SELECT COUNT(*) AS c FROM txs").fetchone()["c"]
+    before_blocks = db.conn.execute("SELECT COUNT(*) AS c FROM blocks").fetchone()["c"]
+    kept = db.conn.execute(
+        "SELECT value FROM txio WHERE txid=? AND direction='out' AND n=0", (today_id,)
+    ).fetchone()["value"]
+
+    name = "LAUNCH_XFER/MY_TOKEN"
+    rpc = _BlockRPC(
+        {
+            50: {
+                "tx": [
+                    {
+                        "txid": today_id,
+                        "vout": [
+                            {"n": 0, "scriptPubKey": {"hex": "76"}},
+                            {"n": 1, "scriptPubKey": {"hex": _op_return_hex(memo), "type": "nulldata"}},
+                        ],
+                    }
+                ]
+            },
+            3: {
+                "tx": [
+                    {
+                        "txid": issue_id,
+                        "vout": [
+                            {"n": 0, "scriptPubKey": {"hex": _issue_script(name, 4), "type": "new_asset"}},
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+    Indexer(db, rpc)._backfill_today_fill_scripts()
+
+    filled = db.conn.execute(
+        "SELECT op_return FROM txio WHERE txid=? AND direction='out' AND n=1", (today_id,)
+    ).fetchone()
+    assert filled["op_return"] == memo.encode().hex()
+    stale = db.conn.execute(
+        "SELECT op_return FROM txio WHERE txid=? AND direction='out' AND n=1", (old_id,)
+    ).fetchone()
+    assert stale["op_return"] is None
+    assert db.conn.execute("SELECT units FROM assets WHERE name=?", (name,)).fetchone()["units"] == 4
+    assert db.conn.execute("SELECT COUNT(*) AS c FROM txs").fetchone()["c"] == before_txs
+    assert db.conn.execute("SELECT COUNT(*) AS c FROM blocks").fetchone()["c"] == before_blocks
+    assert (
+        db.conn.execute(
+            "SELECT value FROM txio WHERE txid=? AND direction='out' AND n=0", (today_id,)
+        ).fetchone()["value"]
+        == kept
+    )
+    db.close()
 
 
 def test_feed_drops_previous_et_day_at_midnight_including_dst(tmp_path: Path):
