@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS lottery_share_guests (
 CREATE INDEX IF NOT EXISTS idx_share_guest_handle ON lottery_share_guests(handle);
 CREATE INDEX IF NOT EXISTS idx_share_guest_addr ON lottery_share_guests(address);
 
--- Listing reserve learned from a verified buy. Not a trade-history table.
+-- First verified reserve for a listing. A later buy does not replace it.
 CREATE TABLE IF NOT EXISTS launch_reserves (
     asset TEXT PRIMARY KEY,
     address TEXT NOT NULL,

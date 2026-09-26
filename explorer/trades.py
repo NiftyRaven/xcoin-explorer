@@ -420,6 +420,42 @@ def _lone_sell_memo(view: dict) -> bool:
     return len(memos) == 1 and memos[0].get("side") == "sell"
 
 
+def _sell_trader(
+    tx: dict,
+    name: str,
+    asset_atoms: int,
+    moved: list,
+    excluded: set[str],
+) -> str | None:
+    """Address that sold the tokens.
+
+    Configured Launch addresses, the treasury, and a learned listing reserve
+    are left out. A combined Launch tx can move a much larger inventory from
+    one of those addresses in the same transaction as the fill.
+    """
+    spent: dict[str, int] = {}
+    for row in tx.get("vin") or []:
+        addr = row.get("address")
+        held = row.get("asset") or ""
+        amount = int(row.get("asset_amount") or 0)
+        if not addr or addr in excluded or amount <= 0 or not _same_asset(held, name):
+            continue
+        spent[addr] = spent.get(addr, 0) + amount
+    if not spent:
+        return None
+    net_loss = {
+        addr: -amount
+        for addr, amount, _held in moved
+        if amount < 0 and addr in spent
+    }
+    exact = [addr for addr, loss in net_loss.items() if loss == asset_atoms]
+    if len(exact) == 1:
+        return exact[0]
+    if len(spent) == 1:
+        return next(iter(spent))
+    return max(spent, key=lambda addr: (net_loss.get(addr, 0), spent[addr]))
+
+
 def _tx_after(delivery: dict, buy: dict) -> bool:
     """Delivery is in the same block, a later block, or the mempool.
 
@@ -456,7 +492,8 @@ def _trade_from_memo(
     stay "on the way" until a Launch address delivers them. A sell counts
     when the asset arrives at a configured Launch address and the XFER
     payout is spent by that asset's learned reserve or a configured Launch
-    address.
+    address. The seller is whoever else spent the asset: Launch addresses,
+    the treasury, and the learned reserve are not the trader.
     """
     if not allowed:
         return None
@@ -515,11 +552,9 @@ def _trade_from_memo(
         payout = int(memo["net_atoms"])
         if not any(addr in payers and spent == payout for addr, spent in _xfer_spent(tx).items()):
             return None
-        losers = [(addr, -amount) for addr, amount, _held in moved if amount < 0 and addr]
-        if not losers:
+        trader = _sell_trader(tx, name, asset_atoms, moved, set(payers) | {LAUNCH_TREASURY})
+        if not trader:
             return None
-        exact = [addr for addr, loss in losers if loss == asset_atoms]
-        trader = exact[0] if len(exact) == 1 else max(losers, key=lambda item: item[1])[0]
         counterparty = gainers[0]
         for addr, amount, held in moved:
             if addr in gainers and amount == asset_atoms and held:
@@ -812,6 +847,9 @@ class TradeFeed:
         self._day_key: str | None = None
         self._day_trades: list[dict] = []
         self._day_built: float = 0.0
+        # Assets whose reserve was already sought and not found. Skips another
+        # op_return scan and another round of block fetches on the next page.
+        self._reserve_misses: set[str] = set()
 
     def _asset_units(self) -> dict[str, int]:
         """Decimal places for assets whose issue script recorded units > 0."""
@@ -1019,6 +1057,7 @@ class TradeFeed:
                 self._day_trades = []
                 self._day_built = 0.0
                 self._mem = None
+                self._reserve_misses = set()
         return start, end, key
 
     def _trades_between(self, start: int, end: int) -> list[dict]:
@@ -1065,18 +1104,32 @@ class TradeFeed:
         return out
 
     def _remember_reserve(self, reserves: dict[str, str], asset: str, address: str, txid: str | None) -> None:
+        """Record a verified reserve. The first address for an asset is kept."""
         if not asset or not address:
             return
-        for alias in _asset_aliases(asset):
+        aliases = list(_asset_aliases(asset))
+        known = next((reserves[alias] for alias in aliases if reserves.get(alias)), None)
+        if known is None:
+            try:
+                marks = ",".join("?" * len(aliases))
+                row = self.db.conn.execute(
+                    f"SELECT address FROM launch_reserves WHERE asset IN ({marks}) LIMIT 1",
+                    aliases,
+                ).fetchone()
+            except Exception:
+                row = None
+            if row and row["address"]:
+                known = row["address"]
+        if known:
+            for alias in aliases:
+                reserves.setdefault(alias, known)
+            return
+        for alias in aliases:
             reserves[alias] = address
+        self._reserve_misses.difference_update(aliases)
         try:
             self.db.conn.execute(
-                """
-                INSERT INTO launch_reserves(asset, address, txid) VALUES(?,?,?)
-                ON CONFLICT(asset) DO UPDATE SET
-                    address=excluded.address,
-                    txid=COALESCE(excluded.txid, launch_reserves.txid)
-                """,
+                "INSERT OR IGNORE INTO launch_reserves(asset, address, txid) VALUES(?,?,?)",
                 (asset, address, txid or None),
             )
             self.db.commit()
@@ -1131,9 +1184,13 @@ class TradeFeed:
             elif _lone_sell_memo(view):
                 retry.append(view)
         self._attach_deliveries(buys, views)
-        for view, base in buys:
-            if not base.get("tokens_pending") and base.get("reserve"):
-                self._remember_reserve(reserves, base["asset"], base["reserve"], view.get("txid"))
+        confirmed = [
+            (view, base)
+            for view, base in buys
+            if not base.get("tokens_pending") and base.get("reserve")
+        ]
+        for view, base in sorted(confirmed, key=lambda pair: _tx_after_key(pair[0])):
+            self._remember_reserve(reserves, base["asset"], base["reserve"], view.get("txid"))
         if retry:
             needed = set()
             for view in retry:
@@ -1151,16 +1208,43 @@ class TradeFeed:
         handles = self._handles([base["trader"] for _, base in found])
         return [self._decorate(base, view, handles) for view, base in found]
 
+    def _asset_indexed(self, asset: str) -> bool:
+        aliases = list(_asset_aliases(asset))
+        if not aliases:
+            return False
+        marks = ",".join("?" * len(aliases))
+        try:
+            row = self.db.conn.execute(
+                f"SELECT 1 FROM assets WHERE name IN ({marks}) LIMIT 1",
+                aliases,
+            ).fetchone()
+        except Exception:
+            return False
+        return row is not None
+
     def _seed_reserves_from_index(self, assets: set[str], reserves: dict[str, str]) -> None:
-        """Older verified buys live in the chain index. Read them; do not rebuild it."""
+        """Older verified buys live in the chain index. Read them; do not rebuild it.
+
+        An asset with no index row, or one already looked up and missing,
+        does not scan ``op_return`` and does not fetch blocks.
+        """
         for asset in assets:
-            if any(alias in reserves for alias in _asset_aliases(asset)):
+            aliases = _asset_aliases(asset)
+            if any(alias in reserves for alias in aliases):
                 continue
-            self._fill_missing_memos(asset)
+            if aliases and aliases <= self._reserve_misses:
+                continue
+            if not self._asset_indexed(asset):
+                continue
             found = self._reserve_from_index(asset)
+            if not found:
+                self._fill_missing_memos(asset)
+                found = self._reserve_from_index(asset)
             if found:
                 address, txid = found
                 self._remember_reserve(reserves, asset, address, txid)
+            else:
+                self._reserve_misses.update(aliases)
 
     def _reserve_from_index(self, asset: str) -> tuple[str, str] | None:
         patterns: list[str] = []
