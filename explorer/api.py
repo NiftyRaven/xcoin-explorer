@@ -20,6 +20,7 @@ from explorer.chain import (
 )
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.queries import Queries, norm_handle
+from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, TradeFeed
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 
@@ -71,11 +72,17 @@ def live_lottery_handles(queries: Queries, indexer, rpc) -> tuple[list[str], lis
     return hat, heartbeat, live if isinstance(live, dict) else None
 
 
-def create_app(queries: Queries, indexer, rpc) -> FastAPI:
+def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | None = None) -> FastAPI:
     app = FastAPI(title="X Coin Explorer", version=__version__)
     app.state.queries = queries
     app.state.indexer = indexer
     app.state.rpc = rpc
+    app.state.trades = TradeFeed(
+        queries.db,
+        rpc,
+        indexer,
+        DEFAULT_LAUNCH_PROCEEDS if launch_proceeds is None else launch_proceeds,
+    )
 
     if WEB.exists():
         app.mount("/static", StaticFiles(directory=str(WEB)), name="static")
@@ -296,6 +303,23 @@ def create_app(queries: Queries, indexer, rpc) -> FastAPI:
     @app.get("/api/rich")
     def rich(limit: int = 50):
         return {"items": queries.rich_list(limit)}
+
+    @app.get("/api/trades")
+    def trades(
+        side: str = "all",
+        q: str = "",
+        before: int | None = None,
+        before_n: int | None = None,
+        limit: int = 25,
+    ):
+        """Public Launch buys and sells, newest first. Confirmed rows come from the index."""
+        return app.state.trades.page(
+            side=side,
+            q=q,
+            before_height=before,
+            before_n=before_n,
+            limit=limit,
+        )
 
     @app.get("/api/mempool")
     def mempool():

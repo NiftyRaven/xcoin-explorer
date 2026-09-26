@@ -32,7 +32,7 @@ def main() -> None:
     indexer = Indexer(db, rpc, settings.batch_size, settings.poll_seconds)
     indexer.start()
     queries = Queries(db)
-    app = create_app(queries, indexer, rpc)
+    app = create_app(queries, indexer, rpc, launch_proceeds=settings.launch_proceeds)
 
     url = f"http://{host}:{port}"
     print(f"X Coin explorer -> {url}")

@@ -32,3 +32,9 @@ batch_size = 40
 # lottery slot time (BLOCK_TIME_SECONDS = 60). While catching up, the
 # indexer does not wait this long.
 poll_seconds = 60
+
+[launch]
+# Addresses that take XFER on a Launch buy and pay XFER on a Launch sell.
+# The public Trades page only lists swaps with one of these addresses.
+# Override with XFER_LAUNCH_PROCEEDS (comma-separated) if you need to.
+proceeds = ["XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF"]
