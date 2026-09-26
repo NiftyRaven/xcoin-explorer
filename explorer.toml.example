@@ -34,12 +34,14 @@ batch_size = 40
 poll_seconds = 60
 
 [launch]
-# Launch parties. A fill is an XL1 OP_RETURN plus the XFER leg, and one
-# of these addresses has to be on the Launch side (buy proceeds, sell
-# payout and inventory). Add any other reserve here.
+# Launch parties. A buy must pay the 0.60% platform fee to the treasury.
+# Each listing has its own reserve; a verified buy teaches that address
+# for later sells. Add an extra reserve here only if you want it trusted
+# before any buy has been delivered.
 # Override with XFER_LAUNCH_PROCEEDS (comma-separated) if you need to.
-# The op_return column is added with ALTER TABLE. Restarting the explorer
-# copies today's missing payloads from the node. Do not delete the database.
+# op_return is added with ALTER TABLE, and launch_reserves is a new small
+# table. Restarting fills today's missing payloads from the node.
+# Do not delete the database.
 proceeds = [
     "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
     "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",

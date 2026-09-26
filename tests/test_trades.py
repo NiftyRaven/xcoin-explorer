@@ -18,6 +18,7 @@ from explorer.queries import Queries
 from explorer.trades import (
     DEFAULT_LAUNCH_PROCEEDS,
     ET,
+    LAUNCH_TREASURY,
     TradeFeed,
     classify_launch_trade,
     describe_trade,
@@ -270,8 +271,8 @@ def _insert_io(db, txid, n, direction, row):
     db.conn.execute(
         """
         INSERT INTO txio(
-            txid, n, direction, address, value, asset, asset_amount, asset_kind, coinbase, script_type
-        ) VALUES(?,?,?,?,?,?,?,?,0,'script')
+            txid, n, direction, address, value, asset, asset_amount, asset_kind, coinbase, script_type, op_return
+        ) VALUES(?,?,?,?,?,?,?,?,0,?,?)
         """,
         (
             txid,
@@ -282,6 +283,8 @@ def _insert_io(db, txid, n, direction, row):
             row.get("asset"),
             int(row.get("asset_amount") or 0),
             row.get("asset_kind"),
+            "nulldata" if row.get("op_return") else "script",
+            row.get("op_return"),
         ),
     )
 
@@ -698,19 +701,31 @@ def _memo_vout(text: str):
     }
 
 
-def test_forged_xl1_buy_self_send_is_not_a_trade():
-    """A copied XL1 buy memo does not count unless the curve-net output pays Launch."""
+def test_forged_xl1_buy_without_treasury_fee_is_not_a_trade():
+    """A copied memo is a buy only when the treasury is paid the platform fee."""
     doc = json.loads((ROOT / "tests" / "fixtures" / "launch_real_trades.json").read_text(encoding="utf-8"))
     units = {"LAUNCH_XFER/MY_TOKEN": doc["units"]}
     attacker = "XattackerAddress444444444444444444"
+    treasury = "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF"
     real = json.loads(json.dumps(doc["trades"][0]["tx"]))
-    assert classify_launch_trade(real, asset_units=units)["side"] == "buy"
+    trade = classify_launch_trade(real, asset_units=units)
+    assert trade["side"] == "buy"
+    assert trade["tokens_pending"] is True
 
-    forged = json.loads(json.dumps(real))
-    for vout in forged["vout"]:
+    # The curve net may go to a brand-new reserve. The treasury fee is the anchor.
+    new_reserve = json.loads(json.dumps(real))
+    for vout in new_reserve["vout"]:
         if vout.get("value") == 594600000000:
             vout["address"] = attacker
-    assert classify_launch_trade(forged, asset_units=units) is None
+    listed = classify_launch_trade(new_reserve, asset_units=units)
+    assert listed["reserve"] == attacker
+    assert listed["tokens_pending"] is True
+
+    no_fee = json.loads(json.dumps(real))
+    for vout in no_fee["vout"]:
+        if vout.get("address") == treasury:
+            vout["address"] = attacker
+    assert classify_launch_trade(no_fee, asset_units=units) is None
 
     net = 9_910_000_000  # 99.10 XFER, grosses to 100 XFER
     self_send = tx(
@@ -719,12 +734,13 @@ def test_forged_xl1_buy_self_send_is_not_a_trade():
     )
     assert classify_launch_trade(self_send, asset_units=units) is None
 
-    # Tokens moved inside the payment must come from a Launch input.
+    # Tokens from the attacker do not count as the treasury delivery.
     buyer = real["vin"][0]["address"]
     delivered = json.loads(json.dumps(real))
     delivered["vin"].append(leg(attacker, 0, "LAUNCH_XFER/MY_TOKEN", 435426510000))
     delivered["vout"].append(leg(buyer, 0, "LAUNCH_XFER/MY_TOKEN", 435426510000))
-    assert classify_launch_trade(delivered, asset_units=units) is None
+    forged_delivery = classify_launch_trade(delivered, asset_units=units)
+    assert forged_delivery["tokens_pending"] is True
 
 
 def test_forged_xl1_sell_without_launch_payout_is_not_a_trade():
@@ -942,6 +958,348 @@ def test_today_op_return_backfill_does_not_rebuild_the_database(tmp_path: Path):
         ).fetchone()["value"]
         == kept
     )
+    db.close()
+
+
+def test_other_root_subasset_memo_is_not_rewritten_to_launch_xfer():
+    net = 9_910_000_000
+    gross = 100 * COIN
+    platform = 60_000_000
+    name = "OTHER/CHILD"
+    buyer_in = gross + COIN
+    change = buyer_in - platform - net - COIN
+    trade = classify_launch_trade(
+        tx(
+            [leg(BUYER, buyer_in)],
+            [
+                leg(DEFAULT_LAUNCH_PROCEEDS[2], platform),
+                leg("XbrandNewReserve11111111111111111111", net),
+                leg(BUYER, change),
+                _memo_vout(f"XL1|B|OTHER/CHILD|{net}|100"),
+            ],
+        ),
+        asset_units={name: 8},
+    )
+    assert trade["asset"] == name
+    assert trade["asset_atoms"] == 100
+    assert trade["xfer_atoms"] == gross
+    assert trade["reserve"] == "XbrandNewReserve11111111111111111111"
+    assert trade["tokens_pending"] is True
+
+
+def test_xcoin_stream_listing_reserve_and_delivery(tmp_path: Path):
+    """Today's XCOIN_STREAM fills. The reserve is not in the configured list."""
+    doc = json.loads((ROOT / "tests" / "fixtures" / "xcoin_stream_trades.json").read_text(encoding="utf-8"))
+    units = {doc["asset"]: doc["units"]}
+    buys = [row for row in doc["events"] if row["role"] == "buy"]
+    sells = [row for row in doc["events"] if row["role"] == "sell"]
+    assert len(buys) == 2 and len(sells) == 2
+    for row in buys:
+        trade = classify_launch_trade(row["tx"], asset_units=units)
+        assert trade is not None, row["txid"]
+        assert trade["side"] == "buy"
+        assert trade["asset"] == doc["asset"]
+        assert trade["xfer_atoms"] == row["xfer_atoms"]
+        assert trade["asset_atoms"] == row["asset_atoms"]
+        assert trade["fee_atoms"] == row["fee_atoms"]
+        assert trade["reserve"] == doc["reserve"]
+        assert trade["trader"] == doc["buyer"]
+        assert trade["tokens_pending"] is True
+        # Short name in the units map is enough; the chain asset is the child name.
+        short = classify_launch_trade(row["tx"], asset_units={"XCOIN_STREAM": doc["units"]})
+        assert short["asset_atoms"] == row["asset_atoms"]
+    for row in sells:
+        assert classify_launch_trade(row["tx"], asset_units=units) is None
+        trade = classify_launch_trade(
+            row["tx"], asset_units=units, reserves={doc["asset"]: doc["reserve"]}
+        )
+        assert trade is not None, row["txid"]
+        assert trade["side"] == "sell"
+        assert trade["asset"] == doc["asset"]
+        assert trade["xfer_atoms"] == row["xfer_atoms"]
+        assert trade["asset_atoms"] == row["asset_atoms"]
+        assert trade["fee_atoms"] == row["fee_atoms"]
+        assert trade["tokens_pending"] is False
+
+    db = Database(tmp_path / "stream.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    db.conn.execute(
+        "INSERT INTO assets(name, kind, units) VALUES(?, 'sub', ?)",
+        (doc["asset"], doc["units"]),
+    )
+    for index, row in enumerate(doc["events"]):
+        store_tx(
+            db,
+            row["tx"],
+            n=row["n"],
+            when=start + 20 + index,
+            txid=row["txid"],
+        )
+    db.commit()
+    feed = TradeFeed(db, None, None, cache_seconds=0)
+    page = feed.page(now=start + 100)
+    shown = {item["txid"]: item for item in page["items"]}
+    assert set(shown) == {row["txid"] for row in buys + sells}
+    for row in buys:
+        item = shown[row["txid"]]
+        assert item["tokens_pending"] is False
+        assert item["confirmed"] is True
+        assert item["asset_atoms"] == row["asset_atoms"]
+        assert item["xfer_atoms"] == row["xfer_atoms"]
+    for row in sells:
+        assert shown[row["txid"]]["side"] == "sell"
+        assert shown[row["txid"]]["confirmed"] is True
+    saved = db.conn.execute(
+        "SELECT address FROM launch_reserves WHERE asset=?", (doc["asset"],)
+    ).fetchone()
+    assert saved["address"] == doc["reserve"]
+    db.close()
+
+
+def test_delivery_from_non_launch_does_not_confirm_the_buy(tmp_path: Path):
+    doc = json.loads((ROOT / "tests" / "fixtures" / "xcoin_stream_trades.json").read_text(encoding="utf-8"))
+    buy = next(row for row in doc["events"] if row["txid"].startswith("1a945de3"))
+    delivery = next(row for row in doc["events"] if row["txid"].startswith("50f0a9e5"))
+    attacker = "XattackerAddress444444444444444444"
+    fake = json.loads(json.dumps(delivery["tx"]))
+    fake["txid"] = "ab" * 32
+    # Keep a treasury XFER output so the tx is still indexed, but the tokens
+    # come from the attacker, not from Launch.
+    for row in fake["vin"]:
+        if row.get("asset"):
+            row["address"] = attacker
+    db = Database(tmp_path / "fake-delivery.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    db.conn.execute(
+        "INSERT INTO assets(name, kind, units) VALUES(?, 'sub', ?)",
+        (doc["asset"], doc["units"]),
+    )
+    store_tx(db, buy["tx"], n=1, when=start + 10, txid=buy["txid"])
+    store_tx(db, fake, n=2, when=start + 11, txid=fake["txid"])
+    db.commit()
+    feed = TradeFeed(db, None, None, cache_seconds=0)
+    waiting = feed.page(now=start + 30)
+    item = next(row for row in waiting["items"] if row["txid"] == buy["txid"])
+    assert item["tokens_pending"] is True
+    assert item["confirmed"] is False
+    assert fake["txid"] not in {row["txid"] for row in waiting["items"]}
+    assert waiting["stats"]["pending"] >= 1
+
+    store_tx(db, delivery["tx"], n=3, when=start + 12, txid=delivery["txid"])
+    db.commit()
+    landed = feed.page(now=start + 30)
+    done = next(row for row in landed["items"] if row["txid"] == buy["txid"])
+    assert done["tokens_pending"] is False
+    assert done["confirmed"] is True
+    assert done["delivery_txid"] == delivery["txid"]
+    assert delivery["txid"] not in {row["txid"] for row in landed["items"]}
+    db.close()
+
+
+def test_sell_learns_reserve_from_an_earlier_verified_buy(tmp_path: Path):
+    """A sell today can use a reserve taught by a buy that is already in the index."""
+    net = 9_910_000_000
+    gross = 100 * COIN
+    platform = 60_000_000
+    atoms = 15_000_000_000
+    tokens = 1_500_000
+    payout = 40 * COIN
+    change = 7 * COIN
+    reserve = "XwidgetReserve111111111111111111111"
+    asset = "LAUNCH_XFER/WIDGET"
+    treasury = DEFAULT_LAUNCH_PROCEEDS[2]
+    db = Database(tmp_path / "history.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    db.conn.execute(
+        "INSERT INTO assets(name, kind, units) VALUES(?, 'sub', 4)",
+        (asset,),
+    )
+    buy = tx(
+        [leg(BUYER, gross + COIN)],
+        [
+            leg(treasury, platform),
+            leg(reserve, net),
+            leg(BUYER, gross + COIN - platform - net - COIN),
+            _memo_vout(f"XL1|B|WIDGET|{net}|{tokens}"),
+        ],
+        height=4,
+        txid="b1" * 32,
+    )
+    delivery = tx(
+        [leg(treasury, 0, asset, atoms)],
+        [leg(BUYER, 0, asset, atoms)],
+        height=4,
+        txid="d1" * 32,
+    )
+    sell = tx(
+        [leg(SELLER, 0, asset, atoms), leg(reserve, payout + change)],
+        [
+            leg(treasury, 0, asset, atoms),
+            leg(SELLER, payout),
+            leg(reserve, change),
+            _memo_vout(f"XL1|S|WIDGET|{payout}|{tokens}"),
+        ],
+        height=8,
+        txid="e1" * 32,
+    )
+    store_tx(db, buy, n=1, when=start - 500, txid=buy["txid"])
+    store_tx(db, delivery, n=2, when=start - 490, txid=delivery["txid"])
+    store_tx(db, sell, n=1, when=start + 30, txid=sell["txid"])
+    db.commit()
+    feed = TradeFeed(db, None, None, cache_seconds=0)
+    page = feed.page(now=start + 40)
+    shown = {item["txid"]: item for item in page["items"]}
+    assert buy["txid"] not in shown
+    assert delivery["txid"] not in shown
+    assert shown[sell["txid"]]["side"] == "sell"
+    assert shown[sell["txid"]]["asset"] == asset
+    assert shown[sell["txid"]]["xfer_atoms"] == payout
+    assert shown[sell["txid"]]["asset_atoms"] == atoms
+    assert shown[sell["txid"]]["trader"] == SELLER
+    saved = db.conn.execute(
+        "SELECT address FROM launch_reserves WHERE asset=?", (asset,)
+    ).fetchone()
+    assert saved["address"] == reserve
+    db.close()
+
+
+def test_brand_new_listing_shows_every_fill_without_a_known_reserve(tmp_path: Path):
+    """First buy, second buy, sell, then a buy right after the sell.
+
+    The reserve address has never been seen. Nothing in the configured list
+    names the asset. Root tokens (``*NAME``), sub-assets of another root,
+    and unique NFTs (``#``) each run the same sequence. Only the treasury
+    is configured.
+    """
+    source = (ROOT / "explorer" / "trades.py").read_text(encoding="utf-8")
+    kinds = (
+        ("root", "*FRESHROOT", "FRESHROOT", 3, "root"),
+        ("sub", "OTHERROOT/FRESHSUB", "OTHERROOT/FRESHSUB", 6, "sub"),
+        ("nft", "FRESHROOT#ONE", "FRESHROOT#ONE", 0, "unique"),
+    )
+    for _label, _memo, chain, _units, _kind in kinds:
+        assert chain not in source
+    reserves = {
+        "root": "XfreshReserveRoot111111111111111111",
+        "sub": "XfreshReserveSub2222222222222222222",
+        "nft": "XfreshReserveNft3333333333333333333",
+    }
+    for addr in reserves.values():
+        assert addr not in source
+
+    db = Database(tmp_path / "fresh.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    for _label, _memo, chain, units, kind in kinds:
+        if units > 0:
+            db.conn.execute(
+                "INSERT INTO assets(name, kind, units) VALUES(?, ?, ?)",
+                (chain, kind, units),
+            )
+    db.commit()
+    assert db.conn.execute("SELECT COUNT(*) AS c FROM launch_reserves").fetchone()["c"] == 0
+
+    gross_for = {
+        1: (9_910_000_000, 100 * COIN),
+        2: (19_820_000_000, 200 * COIN),
+        3: (29_730_000_000, 300 * COIN),
+    }
+    wholes = {1: 100, 2: 250, 3: 80, "sell": 40}
+    expected: list[tuple[str, str, str]] = []
+    seq = 1
+
+    def atoms_for(whole: int, units: int) -> tuple[int, int]:
+        if units == 0:
+            return 1, COIN
+        return whole * 10**units, whole * COIN
+
+    def memo_field(memo_name: str) -> str:
+        return memo_name
+
+    for label, memo_name, chain, units, kind in kinds:
+        reserve = reserves[label]
+        buyer = BUYER
+        height = 70 + seq
+        n = 1
+
+        def put(sample, nout):
+            store_tx(db, sample, n=nout, when=start + 30 + height + nout, txid=sample["txid"])
+
+        for step in (1, 2, 3):
+            net, gross = gross_for[step]
+            whole = 1 if units == 0 else wholes[step]
+            tokens, asset_atoms = atoms_for(whole, units)
+            platform = gross * 60 // 10_000
+            fee = COIN
+            change = gross + fee - platform - net - fee
+            txid = f"{seq:02d}{step:02d}" + "ab" * 30
+            buy = tx(
+                [leg(buyer, gross + fee)],
+                [
+                    leg(LAUNCH_TREASURY, platform),
+                    leg(reserve, net),
+                    leg(buyer, change),
+                    _memo_vout(f"XL1|B|{memo_field(memo_name)}|{net}|{tokens}"),
+                ],
+                height=height,
+                txid=txid,
+            )
+            put(buy, n)
+            n += 1
+            delivery = tx(
+                [leg(LAUNCH_TREASURY, 0, chain, asset_atoms)],
+                [leg(buyer, 0, chain, asset_atoms)],
+                height=height,
+                txid=f"{seq:02d}{step:02d}" + "cd" * 30,
+            )
+            put(delivery, n)
+            n += 1
+            expected.append((txid, "buy", chain, asset_atoms, gross, reserve))
+            if step == 2:
+                sell_whole = 1 if units == 0 else wholes["sell"]
+                sell_tokens, sell_atoms = atoms_for(sell_whole, units)
+                payout = 30 * COIN
+                reserve_change = 4 * COIN
+                sell_id = f"{seq:02d}55" + "ef" * 30
+                sell = tx(
+                    [leg(SELLER, 0, chain, sell_atoms), leg(reserve, payout + reserve_change)],
+                    [
+                        leg(LAUNCH_TREASURY, 0, chain, sell_atoms),
+                        leg(SELLER, payout),
+                        leg(reserve, reserve_change),
+                        _memo_vout(f"XL1|S|{memo_field(memo_name)}|{payout}|{sell_tokens}"),
+                    ],
+                    height=height,
+                    txid=sell_id,
+                )
+                put(sell, n)
+                n += 1
+                expected.append((sell_id, "sell", chain, sell_atoms, payout, reserve))
+        seq += 1
+    db.commit()
+
+    feed = TradeFeed(db, None, None, proceeds=(LAUNCH_TREASURY,), cache_seconds=0)
+    page = feed.page(now=start + 400)
+    shown = {item["txid"]: item for item in page["items"]}
+    assert len(shown) == len(expected)
+    for txid, side, chain, asset_atoms, xfer_atoms, reserve in expected:
+        item = shown[txid]
+        assert item["side"] == side, txid
+        assert item["asset"] == chain, txid
+        assert item["asset_atoms"] == asset_atoms, txid
+        assert item["xfer_atoms"] == xfer_atoms, txid
+        assert item["confirmed"] is True, txid
+        if side == "buy":
+            assert item["tokens_pending"] is False, txid
+            assert item["reserve"] == reserve, txid
+            assert item["delivery_txid"], txid
+        saved = db.conn.execute(
+            "SELECT address FROM launch_reserves WHERE asset=?", (chain,)
+        ).fetchone()
+        assert saved["address"] == reserve
     db.close()
 
 
