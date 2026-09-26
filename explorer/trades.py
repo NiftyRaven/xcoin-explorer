@@ -3,19 +3,20 @@
 Launch (the bonding-curve market) is not in this repo. There is no fills
 client here, so a trade is recognized from the chain:
 
-* one configured proceeds address is a party (buys pay it, sells are paid by it)
-* that address and one other address swap XFER for a single asset
+* a memo-less swap still needs one configured Launch address on one side
+* an ``XL1`` buy must pay the 0.60% platform fee to the Launch treasury
+* the curve-net output of that buy is that listing's own reserve
+* an ``XL1`` sell is paid by that learned reserve, or by a configured
+  Launch address, and the asset goes to a Launch address
 * change back to the sender is netted out and is not counted as a payment
 * the network fee is reported on its own
 
-The known proceeds address is the default. ``explorer.toml`` ``[launch]``
-or ``XFER_LAUNCH_PROCEEDS`` replaces that list.
-
-An ``XL1`` memo is not enough on its own. The Launch side of that fill
-must be a configured Launch address: the buy's curve-net output is paid
-to one, and a sell both delivers the asset to one and spends the XFER
-payout from one (that address is an input). A self-send that copies the
-memo is not a trade.
+The known proceeds, reserve, and treasury addresses are the default.
+``explorer.toml`` ``[launch]`` or ``XFER_LAUNCH_PROCEEDS`` replaces that
+list. Each new listing brings its own reserve, so a fixed list is not
+enough. A verified buy (treasury fee, then a token delivery from the
+treasury) teaches that reserve. A copied memo with no treasury fee is
+not a trade. Only a Launch address can deliver the tokens.
 
 The public page shows only the current America/New_York civil day, from
 12:00 AM. Classified trades are kept in memory and dropped at the next
@@ -46,15 +47,18 @@ FILL_TAG = "XL1"
 LAUNCH_PARENT = "LAUNCH_XFER"
 # 10_000 - 60 bps platform - 30 bps creator. The buyer pays gross; the memo stores net.
 _FAIR_KEEP_BPS = 10_000 - 60 - 30
+_PLATFORM_FEE_BPS = 60
 
-# Addresses that appear on the Launch side of a fill. Buys pay the reserve
-# (or proceeds). Sells are paid by the reserve. The treasury holds inventory
-# and takes the platform fee on a buy. A listing can use another reserve;
-# add it to ``[launch] proceeds`` or ``XFER_LAUNCH_PROCEEDS``.
+# Treasury receives the 0.60% platform fee on a buy and holds listing inventory.
+# Every listing pays that fee here, then uses its own reserve for the curve net.
+LAUNCH_TREASURY = "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF"
+
+# Configured Launch parties. The MY_TOKEN reserve is in this list. A newer
+# listing's reserve is learned from a verified buy and does not have to be.
 DEFAULT_LAUNCH_PROCEEDS = (
     "XvmKQ4Rf1PtETDRMaaCeVgtKmGqqieYfQF",
     "XgjkWe3SvSRTiTJg8YoZWx9feikvsqJpGo",
-    "XmLv1ZYu8qMsGTsWvD9N7C7AFcK844nHwF",
+    LAUNCH_TREASURY,
 )
 
 # How often to rebuild today's in-memory list and re-read the mempool.
@@ -172,15 +176,6 @@ def _nets(rows_in: dict[str, int], rows_out: dict[str, int]) -> dict[str, int]:
     return nets
 
 
-def _buy_gross_atoms(net: int) -> int:
-    """XFER the buyer paid. The memo stores the curve net, not this gross."""
-    if net > 0 and (net * 10_000) % _FAIR_KEEP_BPS == 0:
-        gross = net * 10_000 // _FAIR_KEEP_BPS
-        if gross > net:
-            return gross
-    return net
-
-
 def _memo_text(vout: dict) -> str | None:
     raw = vout.get("op_return")
     if raw is None:
@@ -257,12 +252,79 @@ def _infer_units(tokens: int, moved: int) -> int | None:
     return None
 
 
-def _launch_output(tx: dict, amount: int, allowed: set[str]) -> str | None:
-    """Address of one Launch output that pays exactly ``amount`` XFER atoms."""
+def _asset_aliases(name: str) -> set[str]:
+    """Memo short name and ``LAUNCH_XFER/<short>`` name the same asset.
+
+    A sub-asset of another root (``ROOT/CHILD``) stays that full name.
+    It does not collapse onto a ``LAUNCH_XFER`` child that shares the suffix.
+    """
+    text = (name or "").strip()
+    if text.startswith("*"):
+        text = text[1:]
+    if not text:
+        return set()
+    names = {text}
+    parent = f"{LAUNCH_PARENT}/"
+    if text.startswith(parent):
+        short = text[len(parent) :]
+        if short and "/" not in short:
+            names.add(short)
+    elif "/" not in text:
+        names.add(f"{LAUNCH_PARENT}/{text}")
+    return names
+
+
+def _same_asset(left: str, right: str) -> bool:
+    return bool(_asset_aliases(left) & _asset_aliases(right))
+
+
+def _units_for(asset_units: dict | None, name: str) -> int | None:
+    if not asset_units:
+        return None
+    for alias in _asset_aliases(name):
+        raw = asset_units.get(alias)
+        if raw is None:
+            continue
+        units = int(raw or 0)
+        if units > 0:
+            return units
+    return None
+
+
+def _fair_gross(net: int) -> int | None:
+    """Buyer gross when the memo net is the curve amount after the 0.90% fees."""
+    if net > 0 and (net * 10_000) % _FAIR_KEEP_BPS == 0:
+        gross = net * 10_000 // _FAIR_KEEP_BPS
+        if gross > net:
+            return gross
+    return None
+
+
+def _pays_platform_fee(tx: dict, gross: int) -> bool:
+    """True when an output pays the treasury 0.60% of ``gross``, within 1 atom."""
+    expected = int(gross) * _PLATFORM_FEE_BPS // 10_000
+    rounded = (int(gross) * _PLATFORM_FEE_BPS + 5_000) // 10_000
+    if expected <= 0:
+        return False
+    for row in tx.get("vout") or []:
+        if row.get("address") != LAUNCH_TREASURY:
+            continue
+        paid = _atoms(row.get("value"))
+        if paid == expected or paid == rounded or abs(paid - expected) <= 1:
+            return True
+    return False
+
+
+def _reserve_output(tx: dict, net: int) -> str | None:
+    """Address that receives the curve net. That is this listing's reserve."""
+    hits = []
     for row in tx.get("vout") or []:
         addr = row.get("address")
-        if addr in allowed and _atoms(row.get("value")) == amount:
-            return addr
+        if addr and addr != LAUNCH_TREASURY and _atoms(row.get("value")) == net:
+            if addr not in hits:
+                hits.append(addr)
+    if len(hits) == 1:
+        return hits[0]
     return None
 
 
@@ -282,12 +344,89 @@ def _xfer_spent(tx: dict) -> dict[str, int]:
     return spent
 
 
-def _asset_from_launch(tx: dict, name: str, allowed: set[str]) -> int:
-    total = 0
-    for row in tx.get("vin") or []:
-        if row.get("address") in allowed and (row.get("asset") or "") == name:
-            total += int(row.get("asset_amount") or 0)
-    return total
+def _launch_delivered_in_tx(
+    tx: dict,
+    name: str,
+    asset_atoms: int,
+    buyer: str,
+    allowed: set[str],
+) -> bool:
+    """True when this tx itself sends the memo amount from a Launch input to the buyer."""
+    if not buyer or asset_atoms <= 0:
+        return False
+    from_launch = any(
+        row.get("address") in allowed
+        and _same_asset(row.get("asset") or "", name)
+        and int(row.get("asset_amount") or 0) > 0
+        for row in tx.get("vin") or []
+    )
+    if not from_launch:
+        return False
+    return any(
+        row.get("address") == buyer
+        and _same_asset(row.get("asset") or "", name)
+        and int(row.get("asset_amount") or 0) == asset_atoms
+        for row in tx.get("vout") or []
+    )
+
+
+def _is_token_delivery(
+    view: dict,
+    asset: str,
+    amount: int,
+    buyer: str,
+    launch: set[str],
+) -> bool:
+    """Treasury (or another configured Launch address) sends exactly ``amount`` to ``buyer``."""
+    if not view or view.get("coinbase") or not buyer or amount <= 0:
+        return False
+    if _fill_memos(view):
+        return False
+    from_launch = any(
+        row.get("address") in launch
+        and _same_asset(row.get("asset") or "", asset)
+        and int(row.get("asset_amount") or 0) > 0
+        for row in view.get("vin") or []
+    )
+    if not from_launch:
+        return False
+    return any(
+        row.get("address") == buyer
+        and _same_asset(row.get("asset") or "", asset)
+        and int(row.get("asset_amount") or 0) == int(amount)
+        for row in view.get("vout") or []
+    )
+
+
+def _tx_after_key(view: dict) -> tuple:
+    height = view.get("height")
+    if height is None:
+        return (10**18, 0, view.get("txid") or "")
+    return (int(height), int(view.get("n") or 0), view.get("txid") or "")
+
+
+def _lone_sell_memo(view: dict) -> bool:
+    memos = _fill_memos(view)
+    return len(memos) == 1 and memos[0].get("side") == "sell"
+
+
+def _tx_after(delivery: dict, buy: dict) -> bool:
+    """Delivery is in the same block, a later block, or the mempool.
+
+    Launch sometimes places the treasury transfer ahead of the buy in the
+    same block, so tx order inside the block does not matter.
+    """
+    if not delivery or not buy or delivery.get("txid") == buy.get("txid"):
+        return False
+    dh = delivery.get("height")
+    bh = buy.get("height")
+    if dh is None and bh is None:
+        return True
+    if dh is None:
+        return bh is not None
+    if bh is None:
+        return False
+    return int(dh) >= int(bh)
 
 
 def _trade_from_memo(
@@ -298,25 +437,28 @@ def _trade_from_memo(
     fee: int,
     asset_units: dict | None,
     allowed: set[str],
+    reserves: dict | None = None,
 ) -> dict | None:
     """One Launch fill marked with XL1. Extra fee and change outputs are allowed.
 
-    The memo is ignored unless a configured Launch address is on the Launch
-    side. Buys must pay ``net_atoms`` to one. If this tx also delivers the
-    asset, those tokens must come from a Launch input (real buys deliver
-    them later, from the treasury, so an XFER-only payment still counts).
-    Sells must deliver the asset to a Launch address and spend the memo's
-    XFER payout from a Launch input.
+    A buy counts when the treasury is paid the 0.60% platform fee and some
+    output pays the memo net (that address is the listing reserve). Tokens
+    stay "on the way" until a Launch address delivers them. A sell counts
+    when the asset arrives at a configured Launch address and the XFER
+    payout is spent by that asset's learned reserve or a configured Launch
+    address.
     """
     if not allowed:
         return None
     name = memo["asset"]
-    moved = [(addr, nets.get(name, 0)) for addr, nets in asset_net.items() if nets.get(name, 0)]
-    units = None
-    if asset_units and asset_units.get(name) is not None and int(asset_units.get(name) or 0) > 0:
-        units = int(asset_units[name])
+    moved = []
+    for addr, nets in asset_net.items():
+        for held, amount in nets.items():
+            if amount and _same_asset(held, name):
+                moved.append((addr, amount, held))
+    units = _units_for(asset_units, name)
     inferred = None
-    for _addr, amount in moved:
+    for _addr, amount, _held in moved:
         got = _infer_units(memo["tokens"], abs(amount))
         if got is not None:
             inferred = got
@@ -331,43 +473,47 @@ def _trade_from_memo(
 
     if memo["side"] == "buy":
         net = int(memo["net_atoms"])
-        counterparty = _launch_output(tx, net, allowed)
-        if not counterparty:
+        gross = _fair_gross(net)
+        if gross is None or not _pays_platform_fee(tx, gross):
             return None
-        # In-tx delivery is optional. When it happens, the tokens have to
-        # leave a Launch address and match the memo. A later treasury
-        # transfer is a separate tx and is not itself a fill.
-        if moved:
-            delivered = any(amount == asset_atoms and addr not in allowed for addr, amount in moved)
-            if not delivered or _asset_from_launch(tx, name, allowed) < asset_atoms:
-                return None
-        gross = _buy_gross_atoms(net)
+        reserve = _reserve_output(tx, net)
+        if not reserve:
+            return None
         losses = [(addr, -amount) for addr, amount in xfer_net.items() if amount < 0 and addr]
         if not losses:
             return None
         target = gross + fee
         losses.sort(key=lambda item: (abs(item[1] - target), -item[1]))
         trader = losses[0][0]
+        tokens_pending = not _launch_delivered_in_tx(tx, name, asset_atoms, trader, allowed)
+        counterparty = reserve
         xfer_atoms = gross
     else:
-        if inferred is None and not any(abs(amount) == asset_atoms for _addr, amount in moved):
+        if inferred is None and not any(abs(amount) == asset_atoms for _addr, amount, _held in moved):
             return None
-        gainers = [addr for addr, amount in moved if amount == asset_atoms and addr in allowed]
+        gainers = [addr for addr, amount, _held in moved if amount == asset_atoms and addr in allowed]
         if not gainers:
             return None
-        launch_inputs = [row.get("address") for row in (tx.get("vin") or []) if row.get("address") in allowed]
+        payers = set(allowed)
+        for alias in _asset_aliases(name):
+            learned = (reserves or {}).get(alias)
+            if learned:
+                payers.add(learned)
+        launch_inputs = [row.get("address") for row in (tx.get("vin") or []) if row.get("address") in payers]
         if not launch_inputs:
             return None
         payout = int(memo["net_atoms"])
-        if not any(addr in allowed and spent == payout for addr, spent in _xfer_spent(tx).items()):
+        if not any(addr in payers and spent == payout for addr, spent in _xfer_spent(tx).items()):
             return None
-        losers = [(addr, -amount) for addr, amount in moved if amount < 0 and addr]
+        losers = [(addr, -amount) for addr, amount, _held in moved if amount < 0 and addr]
         if not losers:
             return None
         exact = [addr for addr, loss in losers if loss == asset_atoms]
         trader = exact[0] if len(exact) == 1 else max(losers, key=lambda item: item[1])[0]
         counterparty = gainers[0]
         xfer_atoms = payout
+        tokens_pending = False
+        reserve = ""
 
     if not trader or xfer_atoms <= 0:
         return None
@@ -381,6 +527,9 @@ def _trade_from_memo(
         "price_atoms": price_per_unit_atoms(xfer_atoms, asset_atoms),
         "trader": trader,
         "counterparty": counterparty or "",
+        "reserve": reserve or "",
+        "tokens_pending": tokens_pending,
+        "delivery_txid": None,
     }
     trade["sentence"] = describe_trade(
         trade["side"], short_address(trader), asset_atoms, name, xfer_atoms
@@ -393,6 +542,7 @@ def classify_launch_trade(
     proceeds: Any = None,
     *,
     asset_units: dict | None = None,
+    reserves: dict | None = None,
 ) -> dict | None:
     """Return one Launch trade, or None if this tx is not a buy or sell.
 
@@ -458,7 +608,7 @@ def classify_launch_trade(
         return None
     if len(memos) == 1:
         return _trade_from_memo(
-            memos[0], tx, xfer_net, asset_net, fee, asset_units, allowed
+            memos[0], tx, xfer_net, asset_net, fee, asset_units, allowed, reserves
         )
 
     present = (set(xfer_net) | set(asset_net)) & allowed
@@ -659,7 +809,8 @@ class TradeFeed:
         for row in rows:
             units = int(row["units"] or 0)
             if row["name"] and units > 0:
-                out[row["name"]] = units
+                for alias in _asset_aliases(row["name"]):
+                    out.setdefault(alias, units)
         return out
 
     def tip_height(self) -> int:
@@ -716,6 +867,9 @@ class TradeFeed:
         else:
             confirmations = max(0, tip - height_i + 1) if tip >= 0 else 1
             confirmed = confirmations >= 1
+        # A buy is confirmed only after the treasury delivery is in a block.
+        if base.get("side") == "buy" and base.get("tokens_pending"):
+            confirmed = False
         when = tx.get("time")
         try:
             when_i = int(when) if when else None
@@ -829,7 +983,12 @@ class TradeFeed:
                 continue
             if not view.get("time"):
                 view["time"] = int(time.time())
-            base = classify_launch_trade(view, self.proceeds, asset_units=self._asset_units())
+            base = classify_launch_trade(
+                view,
+                self.proceeds,
+                asset_units=self._asset_units(),
+                reserves=self._load_reserves(),
+            )
             if not base:
                 continue
             trades.append(self._decorate(base, view, self._handles([base["trader"]])))
@@ -868,7 +1027,7 @@ class TradeFeed:
         ).fetchall()
         metas = [dict(r) for r in rows]
         views = self._load_views(metas)
-        found = []
+        ordered = []
         for meta in metas:
             view = views.get(meta["txid"])
             if not view:
@@ -876,11 +1035,242 @@ class TradeFeed:
             when = int(view.get("time") or 0)
             if when < start or when >= end:
                 continue
-            base = classify_launch_trade(view, self.proceeds, asset_units=self._asset_units())
-            if base:
-                found.append((view, base))
+            ordered.append(view)
+        return self._assemble(ordered)
+
+    def _load_reserves(self) -> dict[str, str]:
+        try:
+            rows = self.db.conn.execute("SELECT asset, address FROM launch_reserves").fetchall()
+        except Exception:
+            return {}
+        out: dict[str, str] = {}
+        for row in rows:
+            if row["asset"] and row["address"]:
+                for alias in _asset_aliases(row["asset"]):
+                    out.setdefault(alias, row["address"])
+        return out
+
+    def _remember_reserve(self, reserves: dict[str, str], asset: str, address: str, txid: str | None) -> None:
+        if not asset or not address:
+            return
+        for alias in _asset_aliases(asset):
+            reserves[alias] = address
+        try:
+            self.db.conn.execute(
+                """
+                INSERT INTO launch_reserves(asset, address, txid) VALUES(?,?,?)
+                ON CONFLICT(asset) DO UPDATE SET
+                    address=excluded.address,
+                    txid=COALESCE(excluded.txid, launch_reserves.txid)
+                """,
+                (asset, address, txid or None),
+            )
+            self.db.commit()
+        except Exception:
+            return
+
+    def _attach_deliveries(self, buys: list[tuple[dict, dict]], views: list[dict]) -> None:
+        """Clear tokens-on-the-way once a later Launch delivery of that exact amount is in a block."""
+        launch = set(self.proceeds) | {LAUNCH_TREASURY}
+        used: set[str] = set()
+        ordered = sorted(buys, key=lambda pair: _tx_after_key(pair[0]))
+        candidates = sorted(views, key=_tx_after_key)
+        for view, base in ordered:
+            if base.get("side") != "buy" or not base.get("tokens_pending"):
+                continue
+            for cand in candidates:
+                txid = cand.get("txid") or ""
+                if not txid or txid in used or txid == view.get("txid"):
+                    continue
+                if not _tx_after(cand, view):
+                    continue
+                if not _is_token_delivery(
+                    cand, base["asset"], int(base["asset_atoms"]), base["trader"], launch
+                ):
+                    continue
+                if cand.get("height") is None:
+                    base["delivery_txid"] = txid
+                    continue
+                base["tokens_pending"] = False
+                base["delivery_txid"] = txid
+                used.add(txid)
+                break
+
+    def _assemble(self, views: list[dict]) -> list[dict]:
+        """Buys first, so a verified delivery can teach the reserve before sells are judged."""
+        reserves = self._load_reserves()
+        units = self._asset_units()
+        buys: list[tuple[dict, dict]] = []
+        sells: list[tuple[dict, dict]] = []
+        retry: list[dict] = []
+        for view in views:
+            base = classify_launch_trade(
+                view, self.proceeds, asset_units=units, reserves=reserves
+            )
+            if base and base.get("side") == "buy":
+                buys.append((view, base))
+            elif base and base.get("side") == "sell":
+                sells.append((view, base))
+            elif _lone_sell_memo(view):
+                retry.append(view)
+        self._attach_deliveries(buys, views)
+        for view, base in buys:
+            if not base.get("tokens_pending") and base.get("reserve"):
+                self._remember_reserve(reserves, base["asset"], base["reserve"], view.get("txid"))
+        if retry:
+            needed = set()
+            for view in retry:
+                memo = _fill_memos(view)[0]
+                if not any(alias in reserves for alias in _asset_aliases(memo["asset"])):
+                    needed.add(memo["asset"])
+            self._seed_reserves_from_index(needed, reserves)
+            for view in retry:
+                base = classify_launch_trade(
+                    view, self.proceeds, asset_units=units, reserves=reserves
+                )
+                if base:
+                    sells.append((view, base))
+        found = buys + sells
         handles = self._handles([base["trader"] for _, base in found])
         return [self._decorate(base, view, handles) for view, base in found]
+
+    def _seed_reserves_from_index(self, assets: set[str], reserves: dict[str, str]) -> None:
+        """Older verified buys live in the chain index. Read them; do not rebuild it."""
+        for asset in assets:
+            if any(alias in reserves for alias in _asset_aliases(asset)):
+                continue
+            self._fill_missing_memos(asset)
+            found = self._reserve_from_index(asset)
+            if found:
+                address, txid = found
+                self._remember_reserve(reserves, asset, address, txid)
+
+    def _reserve_from_index(self, asset: str) -> tuple[str, str] | None:
+        patterns: list[str] = []
+        for alias in _asset_aliases(asset):
+            plain = f"XL1|B|{alias}|"
+            patterns.append(f"%{plain}%")
+            patterns.append(f"%{plain.encode().hex()}%")
+        seen: list[str] = []
+        for pattern in patterns:
+            rows = self.db.conn.execute(
+                """
+                SELECT DISTINCT txid FROM txio
+                WHERE direction='out' AND ifnull(op_return, '') LIKE ?
+                LIMIT 20
+                """,
+                (pattern,),
+            ).fetchall()
+            for row in rows:
+                if row["txid"] not in seen:
+                    seen.append(row["txid"])
+        if not seen:
+            return None
+        marks = ",".join("?" * len(seen))
+        metas = [
+            dict(row)
+            for row in self.db.conn.execute(
+                f"""
+                SELECT txid, height, n, time, coinbase FROM txs
+                WHERE txid IN ({marks})
+                ORDER BY height, n
+                """,
+                seen,
+            ).fetchall()
+        ]
+        views = self._load_views(metas)
+        units = self._asset_units()
+        for meta in metas:
+            view = views.get(meta["txid"])
+            if not view:
+                continue
+            base = classify_launch_trade(view, self.proceeds, asset_units=units)
+            if not base or base.get("side") != "buy" or not base.get("reserve"):
+                continue
+            if not _same_asset(base["asset"], asset):
+                continue
+            if self._delivery_in_index(base, view):
+                return base["reserve"], view.get("txid") or ""
+        return None
+
+    def _delivery_in_index(self, buy: dict, buy_view: dict) -> bool:
+        aliases = list(_asset_aliases(buy["asset"]))
+        marks = ",".join("?" * len(aliases))
+        rows = self.db.conn.execute(
+            f"""
+            SELECT t.txid, t.height, t.n, t.time, t.coinbase
+            FROM txs t
+            JOIN txio o ON o.txid = t.txid AND o.direction = 'out'
+              AND o.address = ? AND o.asset_amount = ? AND o.asset IN ({marks})
+            JOIN txio i ON i.txid = t.txid AND i.direction = 'in'
+              AND i.address = ? AND ifnull(i.asset_amount, 0) > 0 AND i.asset IN ({marks})
+            ORDER BY t.height, t.n
+            LIMIT 8
+            """,
+            [buy["trader"], int(buy["asset_atoms"]), *aliases, LAUNCH_TREASURY, *aliases],
+        ).fetchall()
+        for row in rows:
+            view = {
+                "txid": row["txid"],
+                "height": row["height"],
+                "n": row["n"],
+                "time": row["time"],
+                "coinbase": bool(row["coinbase"]),
+            }
+            if _tx_after(view, buy_view):
+                return True
+        return False
+
+    def _fill_missing_memos(self, asset: str) -> None:
+        """Copy OP_RETURN onto older rows for this asset. Does not delete anything."""
+        rpc = self.rpc
+        if rpc is None or not getattr(rpc, "connected", False):
+            return
+        aliases = list(_asset_aliases(asset))
+        if not aliases:
+            return
+        marks = ",".join("?" * len(aliases))
+        heights = [
+            int(row["height"])
+            for row in self.db.conn.execute(
+                f"""
+                SELECT DISTINCT t.height AS height
+                FROM txs t
+                JOIN txio a ON a.txid = t.txid AND a.asset IN ({marks})
+                JOIN txio n ON n.txid = t.txid AND n.direction = 'out'
+                  AND n.script_type = 'nulldata' AND n.op_return IS NULL
+                WHERE t.height IS NOT NULL
+                ORDER BY t.height DESC
+                LIMIT 15
+                """,
+                aliases,
+            ).fetchall()
+        ]
+        for height in heights:
+            block_hash = rpc.try_call("getblockhash", height, default=None)
+            block = rpc.try_call("getblock", block_hash, 2, default=None) if block_hash else None
+            if not isinstance(block, dict):
+                continue
+            for tx in block.get("tx") or []:
+                if not isinstance(tx, dict) or not tx.get("txid"):
+                    continue
+                for vout in tx.get("vout") or []:
+                    spk = vout.get("scriptPubKey") or {}
+                    if spk.get("type") != "nulldata" and not str(spk.get("hex") or "").startswith("6a"):
+                        continue
+                    parsed = parse_vout_script(spk.get("hex") or "")
+                    payload = parsed.get("op_return")
+                    if payload is None:
+                        continue
+                    self.db.conn.execute(
+                        """
+                        UPDATE txio SET op_return=?
+                        WHERE txid=? AND n=? AND direction='out' AND op_return IS NULL
+                        """,
+                        (payload, tx["txid"], int(vout.get("n") or 0)),
+                    )
+        if heights:
+            self.db.commit()
 
     def today_confirmed(self, now: int) -> list[dict]:
         start, end, key = self._begin_day(now)
@@ -919,9 +1309,12 @@ class TradeFeed:
         seen = {t["txid"] for t in confirmed}
         volume = 0
         count = 0
+        waiting = 0
         for trade in confirmed:
             count += 1
             volume += int(trade.get("xfer_atoms") or 0)
+            if trade.get("tokens_pending"):
+                waiting += 1
         for trade in pending_rows:
             if trade.get("txid") in seen:
                 continue
@@ -930,7 +1323,7 @@ class TradeFeed:
         return {
             "trades_today": count,
             "volume_today_atoms": volume,
-            "pending": len(pending_rows),
+            "pending": len(pending_rows) + waiting,
             "day_start": start,
             "day": key,
         }

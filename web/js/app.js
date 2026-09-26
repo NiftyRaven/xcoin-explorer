@@ -1583,11 +1583,16 @@ function tradeMoved(t) {
   const fee = atomsToXfer(t.fee_atoms);
   const legs = t.side === "sell"
     ? `Received ${xfer} · Sent ${asset}`
-    : `Paid ${xfer} · Received ${asset}`;
+    : t.tokens_pending
+      ? `Paid ${xfer} · Tokens on the way`
+      : `Paid ${xfer} · Received ${asset}`;
   return `${legs} · ${price} per unit · Fee ${fee}`;
 }
 
 function tradeStatus(t) {
+  if (t.tokens_pending) {
+    return `<span class="trade-status" title="The buy is in. The treasury has not delivered the tokens yet"><i class="dot wait"></i> Tokens on the way</span>`;
+  }
   if (t.confirmed) {
     const n = t.confirmations ? ` · ${t.confirmations}` : "";
     return `<span class="trade-status" title="Confirmed means locked into the chain"><i class="dot ok"></i> Confirmed${n}</span>`;
@@ -1669,7 +1674,7 @@ async function refreshTradeHead() {
         fresh.push(t);
         continue;
       }
-      if (prev.confirmed !== t.confirmed || prev.confirmations !== t.confirmations || prev.height !== t.height) {
+      if (prev.confirmed !== t.confirmed || prev.confirmations !== t.confirmations || prev.height !== t.height || prev.tokens_pending !== t.tokens_pending || prev.delivery_txid !== t.delivery_txid) {
         Object.assign(prev, t);
         const el = document.getElementById("trade-" + t.txid);
         const node = htmlToNode(tradeCard(t));
@@ -1712,7 +1717,7 @@ async function pageTrades() {
   tradeView = { side, q, items: [] };
   app.innerHTML = `
     <h1 class="page-title">Trades</h1>
-    <p class="sub">Showing today's trades since 12:00 AM ET. Older trades are still on the chain; open any tx, block or address to see them. Confirmed means the trade is locked into the chain.</p>
+    <p class="sub">Showing today's trades since 12:00 AM ET. Older trades are still on the chain; open any tx, block or address to see them. Confirmed means the trade is locked into the chain. Tokens on the way means the buy is in and the treasury has not delivered the tokens yet.</p>
     <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
     <div class="toolbar">
       <div class="tabs" id="trade-tabs">

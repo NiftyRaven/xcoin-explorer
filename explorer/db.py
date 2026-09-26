@@ -181,6 +181,13 @@ CREATE TABLE IF NOT EXISTS lottery_share_guests (
 );
 CREATE INDEX IF NOT EXISTS idx_share_guest_handle ON lottery_share_guests(handle);
 CREATE INDEX IF NOT EXISTS idx_share_guest_addr ON lottery_share_guests(address);
+
+-- Listing reserve learned from a verified buy. Not a trade-history table.
+CREATE TABLE IF NOT EXISTS launch_reserves (
+    asset TEXT PRIMARY KEY,
+    address TEXT NOT NULL,
+    txid TEXT
+);
 """
 
 
@@ -202,6 +209,15 @@ class Database:
         io_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(txio)")}
         if "op_return" not in io_cols:
             self.conn.execute("ALTER TABLE txio ADD COLUMN op_return TEXT")
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS launch_reserves (
+                asset TEXT PRIMARY KEY,
+                address TEXT NOT NULL,
+                txid TEXT
+            )
+            """
+        )
         self.conn.commit()
 
     def close(self) -> None:
