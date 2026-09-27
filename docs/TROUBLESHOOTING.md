@@ -19,8 +19,8 @@ Task Manager (Ctrl+Shift+Esc) should show **xcoin-qt** (GUI) **or**
 
 ### 2. Did you set `server=1` in the file the wallet reads?
 
-X Coin **1.0.13+** (Light or Heavy) double-click reads `xcoin.conf` **next to**
-`X Coin Wallet.exe`, not only `%APPDATA%\XCoin\xcoin.conf`.
+A double-click reads `xcoin.conf` **next to** `X Coin Wallet.exe`, not only
+`%APPDATA%\XCoin\xcoin.conf`.
 
 Open both (if they exist) and add a line that is exactly:
 
@@ -65,7 +65,7 @@ one wallet.
 
 Follow **Optional: password instead of cookie** in [SETUP.md](SETUP.md).
 Username and password must match in the `xcoin.conf` next to
-**X Coin Wallet.exe** (1.0.13+ Light or Heavy) **and** `explorer.toml`.
+**X Coin Wallet.exe** **and** `explorer.toml`.
 
 ---
 
@@ -102,7 +102,7 @@ leave that window open. Default address is
 ## Height stays 0
 
 That can be correct. Height 0 is genesis (12 September 2026, 3:16 AM ET).
-It is **not** a lottery payday. Height 1 is the first lottery block, once
+It pays nothing. Height 1 is the first lottery block, once
 an X Verified node produces it.
 
 If peers are 0, the wallet is not connected to the mesh. The official
@@ -112,21 +112,18 @@ wallet packages ship `addnode` / `seednode`. Do not invent a host.
 
 ## Lottery “0 active”
 
-Live “N active” is `getlotteryinfo.active_nodes` from the connected
-wallet. From **1.0.16** that is live X Verified heartbeats. Older wallets
-reported the frozen draw-hat size. Handle chips still prefer
-`stamped_handles` when the node has it (the baked seed prints every
-main block), else the last indexed coinbase `XVA1` handles. The explorer
-does **not** treat `getactivenodes` as the hat — a player wallet often
-omits itself.
+“N active” is `getlotteryinfo.active_nodes` on the connected wallet: live
+X Verified heartbeats. Handle chips use `stamped_handles` when the node
+has them, otherwise the last coinbase `XVA1`. The explorer does not treat
+`getactivenodes` as the hat. A player wallet often omits itself.
 
-Historical winners come from each block’s coinbase `XVA1` (handle + id +
-stamp). The winner is who got paid. Payout addresses change; `@handle`
-does not. `XID1` is the asset-root claim, not lottery identity.
+Winners come from each block’s coinbase `XVA1` (handle, id, and stamp).
+The winner is who got paid. Payout addresses change; the `@handle` does
+not. `XID1` is the asset-root claim, not lottery identity.
 
-**Guest shares** (wallet 1.0.14) are later sends of a percent of a mature
-lottery output. They are not a second lottery. Guests never enter the hat.
-The explorer tags a share only when the amounts match that wallet math.
+Guest shares are later sends of a percent of a mature lottery output.
+They are not a second lottery. Guests are not in the hat. A share is
+tagged only when the amounts match that split.
 
 ---
 

@@ -489,9 +489,9 @@ def test_feed_orders_filters_and_skips_non_trades(tmp_path: Path):
     assert 'href="#/trades"' in html
     assert ">Trades<" in html
     assert "pageTrades" in js
-    assert "Showing today's trades since 12:00 AM ET" in js
-    assert "Older trades are still on the chain; open any tx, block or address to see them." in js
-    assert "Confirmed means the trade is locked into the chain" in js
+    assert "since midnight ET" in js
+    assert "Older ones stay on the chain." in js
+    assert "Confirmed means the trade is in a block." in js
     assert "No Launch trades yet today." in js
     assert "Trades today" in js
     assert "XFER volume today" in js

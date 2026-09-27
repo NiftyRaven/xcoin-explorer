@@ -73,8 +73,8 @@ function Ensure-ConfLine([string]$path, [string]$key, [string]$value) {
 }
 
 function Get-LatestWalletRelease {
-    # GitHub "latest" can stay on an older Light zip. Parse tags like
-    # v1.0.16-light as 1.0.16 and pick the highest numeric version.
+    # GitHub "latest" can stay on an older Light zip. Parse a Light or
+    # Heavy tag down to its version number and pick the highest.
     # Prefer Heavy when Light and Heavy share that version.
     try {
         $headers = @{ "User-Agent" = "XFER-Explorer-setup" }

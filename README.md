@@ -1,13 +1,13 @@
 # XFER Explorer
 
-A **local** block explorer, asset explorer, and lottery browser for
-[X Coin (XFER)](https://github.com/NiftyRaven/x-coin) **1.0.13+** (Light or Heavy).
+A block explorer for [X Coin (XFER)](https://github.com/NiftyRaven/x-coin)
+(Light or Heavy). Use the [latest release](https://github.com/NiftyRaven/x-coin/releases).
 
-One website on your machine. Search a height, transaction, `X…` address,
-asset name, or `@handle`. Click an asset to see holders, activity, and
-IPFS images or video. See who won each minute’s lottery.
+It runs on your machine. Search a height, transaction, `X…` address,
+asset name, or `@handle`. Open an asset for holders and its file.
+See who won each minute’s lottery.
 
-This is **not** a wallet. It cannot spend coins. It only reads a node you
+This is not a wallet. It cannot spend coins. It only reads a node you
 already run.
 
 **New here?** Double-click **[SETUP.bat](SETUP.bat)** (Windows) or run
@@ -15,10 +15,8 @@ already run.
 **[START HERE.txt](START HERE.txt)** · **[docs/SETUP.md](docs/SETUP.md)**.
 Stuck? **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**.
 
-Use any **1.0.13+** Light or Heavy wallet. Same chain, same lottery.
-Setup downloads the **newest official** zip from Releases (including
-tags like `v1.0.16-light`). Do not stay on 1.0.12 if you need Claim
-My Asset to confirm.
+Light and Heavy are the same chain. Setup downloads the newest official
+zip from [Releases](https://github.com/NiftyRaven/x-coin/releases).
 
 ---
 
@@ -53,15 +51,15 @@ Copy examples locally. Never commit `explorer.toml`.
 | Blocks | Every height; coinbase lottery payouts from height 1 |
 | Transaction | Inputs, outputs, assets; coinbase identity is `XVA1` `@handle` (not `XID1`) |
 | Address | XFER balance, assets, lottery wins |
-| Assets | Identity roots, `NAME/CHILD` subs, `NAME#tag` uniques; click through for holders, activity, and IPFS image/video |
+| Assets | Roots, `NAME/CHILD` subs, `NAME#tag` uniques; holders and files |
 | Lottery | Live draw, active `@handles`, history, leaderboard, guest shares |
 | Members | Browse every eligible `@handle`, or search any handle |
-| Stats | Observatory: emission clock, hat constellation, luck vs fair share |
+| Stats | Emission, hat size, and win share |
 | Holders | Richest XFER addresses |
 | Mempool / Network | Unconfirmed txs and peers |
 
-Height **0** is genesis (12 Sep 2026, 3:16 AM America/New_York). It is not
-a payday. Lottery winners start at height **1**.
+Height **0** is genesis (12 Sep 2026, 3:16 AM America/New_York). It pays
+nothing. Lottery winners start at height **1**.
 
 ---
 
@@ -90,7 +88,7 @@ the wallet start actually reads **and** in a local `explorer.toml`
 ## Requirements
 
 - Python 3.11+
-- [X Coin wallet 1.0.13+ Light or Heavy](https://github.com/NiftyRaven/x-coin/releases) with `server=1`
+- [Latest X Coin release](https://github.com/NiftyRaven/x-coin/releases), Light or Heavy, with `server=1`
 - Ports: node RPC **38442**, explorer **8080** (localhost)
 
 ```bat
