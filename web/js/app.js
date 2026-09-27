@@ -1415,7 +1415,7 @@ async function pageStats() {
     </div>
     <div class="card" style="margin-bottom:16px">
       <h2>Subsidy schedule</h2>
-      <p class="muted">The subsidy halves every 2,100,000 minutes (about 4 years), across about 156 years. The lit step is the current era. Each halving adds one winner that minute.</p>
+      <p class="muted">The subsidy halves every 2,100,000 minutes (about 4 years). The lit step is the current era. Each halving adds one winner that minute.</p>
       ${eraStairs(S.eras, S.height)}
       <p class="muted" style="margin-top:10px">Era ${S.era} · ${fmtXferShort(S.subsidy_atoms)} / minute · next halving at height ${(S.next_halving_height || 0).toLocaleString()} · last paying height ${Number(S.last_paying_height || 0).toLocaleString()}</p>
       <div class="launch-strip" title="Height 0 is genesis and pays nothing. Height 1 is the first draw."><i></i><i></i></div>

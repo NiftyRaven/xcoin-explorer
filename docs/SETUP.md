@@ -129,7 +129,7 @@ cd xcoin-explorer
 ### Option B — Release zip (no Git)
 
 1. Open [xcoin-explorer Releases](https://github.com/NiftyRaven/xcoin-explorer/releases).
-2. Download **XFER-Explorer-1.3.1.zip**.
+2. Download the latest **XFER-Explorer** zip.
 3. Right-click → **Extract All**.
 4. Open the folder and double-click **SETUP.bat** (Windows) or run
    `./setup.sh` (Linux).
