@@ -532,7 +532,7 @@ function lotteryCard(live, nodes, winnerHandles, activeCount) {
         const who = mapped[i] ? handle(mapped[i]) : `<span class="faint">no XVA1</span>`;
         return `<div class="winner"><div class="who"><span class="badge lottery">winner</span> ${who}</div><div class="amt">${atomsToXfer(rewards[i] || 0)}</div></div>`;
       }).join("")
-    : `<div class="empty">No eligible X Verified nodes in the live draw yet.</div>`;
+    : `<div class="empty">No eligible nodes in this draw yet.</div>`;
   const fromApi = Number(activeCount);
   const fromWallet = Number(L.active_nodes);
   const activeN = Number.isFinite(fromApi)
@@ -541,11 +541,12 @@ function lotteryCard(live, nodes, winnerHandles, activeCount) {
       ? fromWallet
       : ((nodes || []).length || 0);
   const slot = L.slot;
+  const winnerN = L.winner_count ?? 1;
   return `
     <div class="card">
       <h2>This minute’s lottery</h2>
       <div class="countdown" id="cd">—:—</div>
-      <p class="muted">Height ${L.height ?? "—"} · slot ${slot ?? "—"} · ${activeN} active · ${L.winner_count ?? 1} winner(s)</p>
+      <p class="muted">Height ${L.height ?? "—"} · slot ${slot ?? "—"} · ${activeN} active · ${winnerN} winner${Number(winnerN) === 1 ? "" : "s"}</p>
       ${rows}
       <div class="row-actions">
         <a href="#/lottery">Full lottery →</a>
@@ -602,7 +603,7 @@ function ringClock(progress, remLabel) {
 }
 
 function eraStairs(eras, height) {
-  if (!eras || !eras.length) return `<div class="empty">Emission eras appear after genesis.</div>`;
+  if (!eras || !eras.length) return `<div class="empty">Shows after genesis.</div>`;
   const maxSub = Math.max(...eras.map((e) => e.subsidy_atoms || 0), 1);
   return `<div class="era-track">${eras.map((e) => {
     const h = Math.max(8, Math.round((e.subsidy_atoms / maxSub) * 100));
@@ -615,7 +616,7 @@ function eraStairs(eras, height) {
 
 function hatConstellation(handles) {
   const rows = (handles || []).slice(0, 16);
-  if (!rows.length) return `<div class="empty">No XVA1 handles indexed yet.</div>`;
+  if (!rows.length) return `<div class="empty">No handles indexed yet.</div>`;
   const size = 360;
   const cx = 180;
   const cy = 180;
@@ -645,7 +646,7 @@ function hatConstellation(handles) {
 
 function pulseChart(points) {
   const rows = points || [];
-  if (rows.length < 2) return `<div class="empty">Hat size pulse appears after a few lottery blocks.</div>`;
+  if (rows.length < 2) return `<div class="empty">Shows after a few lottery blocks.</div>`;
   const w = 640;
   const h = 140;
   const pad = 12;
@@ -668,7 +669,7 @@ function pulseChart(points) {
 
 function luckRows(handles) {
   const rows = (handles || []).filter((h) => (h.hat_blocks || 0) > 0).slice(0, 12);
-  if (!rows.length) return `<div class="empty">Need XVA1 hats to score luck.</div>`;
+  if (!rows.length) return `<div class="empty">Shows after a few hats are indexed.</div>`;
   const max = Math.max(...rows.flatMap((h) => [h.wins || 0, h.expected_wins || 0]), 1);
   return rows.map((h) => {
     const act = (h.wins || 0) / max * 100;
@@ -709,7 +710,7 @@ async function pageHome() {
               <td class="muted">${timeAgo(b.time)}</td>
               <td>${b.tx_count}</td>
               <td>${blockWinner(b)}</td>
-            </tr>`).join("") || `<tr><td colspan="4" class="empty">No blocks indexed yet. Genesis appears once the node is up.</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="4" class="empty">No blocks yet.</td></tr>`}
           </tbody>
         </table>
         <div class="row-actions"><a href="#/blocks">All blocks →</a></div>
@@ -720,7 +721,7 @@ async function pageHome() {
       <h2>Recent lottery winners</h2>
       <table>
         <thead><tr><th>Block</th><th>Winner</th><th>Reward</th><th>When</th></tr></thead>
-        <tbody>${recentWins || `<tr><td colspan="4" class="empty">Winners show up from height 1 coinbases (XHB1).</td></tr>`}</tbody>
+        <tbody>${recentWins || `<tr><td colspan="4" class="empty">Winners start at height 1.</td></tr>`}</tbody>
       </table>
     </div>`;
   tickCountdown();
@@ -730,7 +731,7 @@ async function pageBlocks() {
   const data = await api("/blocks?limit=40");
   app.innerHTML = `
     <h1 class="page-title">Blocks</h1>
-    <p class="sub">One height per minute. Height 0 is genesis (no payday). Height 1+ is the lottery coinbase.</p>
+    <p class="sub">One block per minute. Height 0 is genesis and pays nothing. Height 1 is the first draw.</p>
     <div class="card">
       <table>
         <thead><tr><th>Height</th><th>Hash</th><th>Time</th><th>Tx</th><th>Winners</th><th>Winner</th></tr></thead>
@@ -772,7 +773,7 @@ async function pageBlock(key) {
           ${winnerWho(w)}
         </div>
         <div class="amt">${atomsToXfer(w.amount)}</div>
-      </div>`).join("") : `<div class="empty">${b.height === 0 ? "Genesis has no lottery." : "No XHB1 winners decoded for this block."}</div>`}
+      </div>`).join("") : `<div class="empty">${b.height === 0 ? "Genesis has no lottery." : "No winners on this block."}</div>`}
     </div>
     <div class="card">
       <h2>Transactions</h2>
@@ -793,7 +794,7 @@ async function pageBlock(key) {
 async function pageTx(id) {
   const t = await api("/tx/" + encodeURIComponent(id));
   if (t.unindexed) {
-    app.innerHTML = `<h1 class="page-title">Transaction</h1><div class="card"><p>This transaction is on the node, and not in the explorer index yet.</p><pre class="media-text break-anywhere">${esc(JSON.stringify(t.rpc, null, 2))}</pre></div>`;
+    app.innerHTML = `<h1 class="page-title">Transaction</h1><div class="card"><p>On the node, not in the explorer index yet.</p><pre class="media-text break-anywhere">${esc(JSON.stringify(t.rpc, null, 2))}</pre></div>`;
     return;
   }
   const vin = (t.vin || []).map((v) => `<div>${v.coinbase ? `<span class="badge lottery">coinbase</span>` : linkAddr(v.address)}
@@ -815,7 +816,7 @@ async function pageTx(id) {
     </div>
     ${t.host_share ? `<div class="card" style="margin-bottom:16px">
       <h2>Guests</h2>
-      ${(t.host_share.guests || []).map((g) => `<div class="winner"><div>${g.handle ? handle(g.handle) : linkAddr(g.address)}</div><div class="amt">${atomsToXfer(g.amount)}</div></div>`).join("") || `<div class="empty">No guest outputs decoded.</div>`}
+      ${(t.host_share.guests || []).map((g) => `<div class="winner"><div>${g.handle ? handle(g.handle) : linkAddr(g.address)}</div><div class="amt">${atomsToXfer(g.amount)}</div></div>`).join("") || `<div class="empty">No guest outputs.</div>`}
     </div>` : ""}
     <div class="io">
       <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">None</div>`}</div>
@@ -839,7 +840,7 @@ async function pageAddress(addr) {
       <div class="card">
         <h2>Transactions</h2>
         <table>
-          <tbody>${(a.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${linkBlock(t.height)}</td><td>${atomsToXfer(t.xfer_out)}</td></tr>`).join("") || `<tr><td class="empty">No txs indexed.</td></tr>`}</tbody>
+          <tbody>${(a.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${linkBlock(t.height)}</td><td>${atomsToXfer(t.xfer_out)}</td></tr>`).join("") || `<tr><td class="empty">No transactions.</td></tr>`}</tbody>
         </table>
       </div>
       <div>
@@ -863,7 +864,7 @@ async function pageAssets() {
   const data = await api("/assets?limit=80");
   app.innerHTML = `
     <h1 class="page-title">Assets</h1>
-    <p class="sub">Identity roots are protocol-assigned from Sign in with X. Subs are NAME/CHILD. Uniques are NAME#tag. Click an asset to open its page and IPFS media.</p>
+    <p class="sub">Roots come from Sign in with X. Subs are NAME/CHILD. Uniques are NAME#tag.</p>
     <div class="card">
       <table class="click-rows">
         <thead><tr><th>Name</th><th>Kind</th><th>Amount</th><th>IPFS</th><th>X</th><th>Created</th></tr></thead>
@@ -1124,7 +1125,7 @@ async function pageAsset(name) {
       <div class="card">
         <h2>Holders</h2>
         <table>
-          ${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td class="empty">No holders in the UTXO index.</td></tr>`}
+          ${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td class="empty">No holders.</td></tr>`}
         </table>
       </div>
       <div class="card">
@@ -1165,7 +1166,7 @@ async function pageIdentity(handleName) {
   app.innerHTML = `
     <p class="crumb"><a href="${membersHash("all", "")}">Members</a> / @${esc(name)}</p>
     <h1 class="page-title">@${esc(name)}</h1>
-    <p class="sub">${p.found ? "Lottery identity from coinbase XVA1 (the handle stays; payout addresses change). Guest shares are wallet sends after a mature win — guests never enter the hat." : "This handle is not in the indexed hat, live eligible set, or guest-share index yet."}</p>
+    <p class="sub">${p.found ? "The @handle is the lottery identity. Payout addresses change. Guest shares are later sends from a mature win. Guests are not in the hat." : "This handle is not in the hat, the live eligible set, or any guest share yet."}</p>
     <div class="grid stats">
       <div class="card stat"><span>Now</span><b>${p.eligible ? "eligible" : "offline"}</b></div>
       <div class="card stat"><span>Wins</span><b>${p.wins || 0}</b></div>
@@ -1191,7 +1192,7 @@ async function pageIdentity(handleName) {
         <table>
           <thead><tr><th>Block</th><th>Paid</th></tr></thead>
           <tbody>
-            ${(p.wins_recent || []).map((w) => `<tr><td>${linkBlock(w.height)}</td><td>${atomsToXfer(w.amount)}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">No XVA1 wins indexed for this handle.</td></tr>`}
+            ${(p.wins_recent || []).map((w) => `<tr><td>${linkBlock(w.height)}</td><td>${atomsToXfer(w.amount)}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">No wins for this handle.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1200,7 +1201,7 @@ async function pageIdentity(handleName) {
         <table>
           <thead><tr><th>Block</th><th>n</th></tr></thead>
           <tbody>
-            ${(p.appearances || []).map((a) => `<tr><td>${linkBlock(a.height)}</td><td>${a.n ?? "—"}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">Not seen in an indexed XVA1 hat.</td></tr>`}
+            ${(p.appearances || []).map((a) => `<tr><td>${linkBlock(a.height)}</td><td>${a.n ?? "—"}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">Not seen in a hat.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1208,21 +1209,21 @@ async function pageIdentity(handleName) {
     <div class="grid two" style="margin-top:16px">
       <div class="card">
         <h2>Shares sent</h2>
-        <p class="muted">1.0.14 host send: a percent of a mature lottery output, split equally.</p>
+        <p class="muted">A percent of a mature win, split equally.</p>
         <table>
           <thead><tr><th>Tx</th><th>%</th><th>Guests</th><th>Pot</th></tr></thead>
           <tbody>
-            ${(p.shares_sent || []).map((s) => `<tr><td>${linkTx(s.txid)}</td><td>${s.guest_percent}%</td><td>${s.guest_count}</td><td>${atomsToXfer(s.pot_amount)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No host share-outs indexed for this handle.</td></tr>`}
+            ${(p.shares_sent || []).map((s) => `<tr><td>${linkTx(s.txid)}</td><td>${s.guest_percent}%</td><td>${s.guest_count}</td><td>${atomsToXfer(s.pot_amount)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No shares sent.</td></tr>`}
           </tbody>
         </table>
       </div>
       <div class="card">
         <h2>Guest receipts</h2>
-        <p class="muted">This handle never entered the hat for these amounts.</p>
+        <p class="muted">Paid by a host. This handle was not in the hat.</p>
         <table>
           <thead><tr><th>Tx</th><th>Host</th><th>Paid</th></tr></thead>
           <tbody>
-            ${(p.shares_received || []).map((s) => `<tr><td>${linkTx(s.txid)}</td><td>${s.host_handle ? handle(s.host_handle) : "—"}</td><td>${atomsToXfer(s.amount)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No guest receipts indexed.</td></tr>`}
+            ${(p.shares_received || []).map((s) => `<tr><td>${linkTx(s.txid)}</td><td>${s.host_handle ? handle(s.host_handle) : "—"}</td><td>${atomsToXfer(s.amount)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No guest receipts.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1237,7 +1238,7 @@ async function pageMembers() {
   const items = data.items || [];
   app.innerHTML = `
     <h1 class="page-title">Eligible members</h1>
-    <p class="sub">X Verified <code>@handles</code> in this minute’s hat or with a live heartbeat. Search any handle — including people who were eligible earlier and are offline now.</p>
+    <p class="sub">X Verified <code>@handles</code> in this minute’s hat, or with a live heartbeat. Search also finds handles that were eligible before and are offline now.</p>
     <div class="card">
       <div class="toolbar">
         <form class="search" id="member-search">
@@ -1259,7 +1260,7 @@ async function pageMembers() {
             <td>${m.wins || 0}</td>
             <td>${atomsToXfer(m.earned || 0)}</td>
             <td>${m.last_hat != null ? linkBlock(m.last_hat) : "—"}</td>
-          </tr>`).join("") || `<tr><td colspan="5" class="empty">${q ? "No handle matches that search." : (scope === "eligible" ? "No eligible members this minute. Try All handles, or wait for the next hat." : "No handles indexed yet.")}</td></tr>`}
+          </tr>`).join("") || `<tr><td colspan="5" class="empty">${q ? "No handle matches that search." : (scope === "eligible" ? "No one is eligible this minute. Try All handles." : "No handles indexed yet.")}</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -1287,18 +1288,18 @@ async function pageLottery() {
           <div class="who"><span class="badge">hat</span> ${handle(h)}</div>
         </div>`).join("")
     : (L.rpc_connected
-        ? `<div class="empty">No XVA1 handles this minute. The baked seed prints every main block; wait for the next coinbase.</div>`
-        : `<div class="empty">Connect a local wallet (see docs/SETUP.md). History below is from blocks already indexed.</div>`);
+        ? `<div class="empty">No handles in this minute’s hat yet.</div>`
+        : `<div class="empty">Wallet is offline. History below is from blocks already indexed.</div>`);
   app.innerHTML = `
     ${nodeBanner()}
     <h1 class="page-title">Lottery</h1>
-    <p class="sub">The baked seed prints every main block. Coinbase <code>XVA1</code> is the public roll (handle + id + stamp). The winner is who got paid — history and the leaderboard key on that <code>@handle</code>, not the payout address (addresses change; the handle does not). Live “N active” is <code>getlotteryinfo.active_nodes</code> from the connected wallet (1.0.16+ this is live heartbeats; older wallets reported the frozen hat size). Handle chips still come from <code>stamped_handles</code> or the last indexed <code>XVA1</code>. Height 0 is not a payday. From wallet <strong>1.0.14</strong>, a verified host can share a percent of a mature win with invited guests. That is a later wallet send. Guests never enter the hat.</p>
+    <p class="sub">Each block is one minute and one draw among X Verified nodes in the hat. The winner is the @handle paid on that block. Height is the block, slot is the minute, and active is how many nodes are in the draw. The countdown is time left in the minute. Height 0 pays nothing; the first draw is height 1. A host can later send a percent of a mature win to invited guests, split equally. Guests are not in the hat.</p>
     <div class="grid two">
       ${lotteryCard(live, nodes, L.winner_handles, L.active_count)}
       <div class="card">
         <h2>Active now${(L.active_count != null || live.active_nodes != null) ? ` · ${L.active_count ?? live.active_nodes}` : ""}</h2>
         ${liveHint}
-        <p class="muted" style="margin-top:12px">Eligible locally: ${live.local_eligible ? "yes" : "no"} · verified: ${live.local_x_verified ? "yes" : "no"} · @${esc(live.local_xaccount || "—")}</p>
+        <p class="muted" style="margin-top:12px">This wallet: eligible ${live.local_eligible ? "yes" : "no"} · verified ${live.local_x_verified ? "yes" : "no"} · @${esc(live.local_xaccount || "—")}</p>
         <div class="row-actions"><a href="#/members">Browse all eligible members →</a></div>
       </div>
     </div>
@@ -1311,7 +1312,7 @@ async function pageLottery() {
             ${(L.history || []).map((h) => {
               const w = (h.winners || [])[0] || {};
               return `<tr><td>${linkBlock(h.height)}</td><td>${winnerWho(w)}</td><td>${atomsToXfer(w.amount)}</td></tr>`;
-            }).join("") || `<tr><td colspan="3" class="empty">No lottery blocks yet. Height 0 is genesis (unspendable, not a win). Height 1 is the first draw.</td></tr>`}
+            }).join("") || `<tr><td colspan="3" class="empty">No draws yet. Height 0 is genesis and is not a win. Height 1 is the first draw.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1323,7 +1324,7 @@ async function pageLottery() {
             ${(L.leaders || []).map((x) => `<tr>
               <td>${x.xaccount ? handle(x.xaccount) : `<span class="faint">no XVA1</span>`}</td>
               <td>${x.wins}</td><td>${atomsToXfer(x.earned)}</td>
-            </tr>`).join("") || `<tr><td colspan="3" class="empty">No XVA1 winners indexed.</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="3" class="empty">No winners yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1331,7 +1332,7 @@ async function pageLottery() {
     <div class="grid two" style="margin-top:16px">
       <div class="card">
         <h2>Guest shares</h2>
-        <p class="muted">Detected when a mature lottery coinbase is spent as a 1–100% equal split (wallet 1.0.14).</p>
+        <p class="muted">A host sends 1–100% of a mature win, split equally among guests.</p>
         <table>
           <thead><tr><th>Tx</th><th>Host</th><th>%</th><th>Guests</th></tr></thead>
           <tbody>
@@ -1340,16 +1341,16 @@ async function pageLottery() {
               <td>${s.host_handle ? handle(s.host_handle) : "—"}</td>
               <td>${s.guest_percent}%</td>
               <td>${s.guest_count}</td>
-            </tr>`).join("") || `<tr><td colspan="4" class="empty">No host share-outs indexed yet. They appear after a mature win is split.</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="4" class="empty">None yet. These show up after a mature win is split.</td></tr>`}
           </tbody>
         </table>
       </div>
       <div class="card">
         <h2>This wallet</h2>
         ${L.wallet_share && typeof L.wallet_share === "object" && !L.wallet_share.error ? `
-          <p class="muted">${L.wallet_share.enabled ? `Sharing ${L.wallet_share.guest_percent || 0}% of each mature win.` : "Share lottery wins is off on the connected wallet."}${L.wallet_share.assetindex ? "" : " Asset index is off — the wallet must enable it once to look up guest roots."}</p>
+          <p class="muted">${L.wallet_share.enabled ? `Sharing ${L.wallet_share.guest_percent || 0}% of each mature win.` : "Share lottery wins is off on the connected wallet."}${L.wallet_share.assetindex ? "" : " Asset index is off. Turn it on once in the wallet so guest roots can be looked up."}</p>
           ${(L.wallet_share.guests || []).map((g) => `<div class="winner"><div>${handle(g.handle)} ${g.ready ? `<span class="badge ok">ready</span>` : `<span class="badge">no holder</span>`}</div></div>`).join("") || `<div class="empty">No guests invited on this wallet.</div>`}
-        ` : `<div class="empty">Connect a local wallet to see its guest list. listguests is wallet-only and is not the hat.</div>`}
+        ` : `<div class="empty">Connect a local wallet to see its guest list. This list is not the hat.</div>`}
       </div>
     </div>`;
   tickCountdown();
@@ -1363,7 +1364,7 @@ async function pageRich() {
       <table>
         <thead><tr><th>#</th><th>Address</th><th>Balance</th></tr></thead>
         <tbody>
-          ${(data.items || []).map((r, i) => `<tr><td>${i + 1}</td><td>${linkAddr(r.address)}</td><td>${atomsToXfer(r.balance)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">UTXO set is empty until blocks are indexed.</td></tr>`}
+          ${(data.items || []).map((r, i) => `<tr><td>${i + 1}</td><td>${linkAddr(r.address)}</td><td>${atomsToXfer(r.balance)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No balances yet.</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -1398,48 +1399,48 @@ async function pageStats() {
   const kinds = S.assets && S.assets.by_kind ? S.assets.by_kind : [];
   app.innerHTML = `
     <h1 class="page-title">Observatory</h1>
-    <p class="sub">Every height is one minute. Height 0 paid nothing — that is the fair launch. The gold ring is how far this chain has walked through ~${esc(S.years_of_emission)} years of emission. The blue ring is <em>this</em> minute.</p>
+    <p class="sub">Each height is one minute. Height 0 paid nothing. The gold ring is emission so far (about ${esc(S.years_of_emission)} years). The blue ring is this minute.</p>
     <div class="obs-hero">
       <div class="card">${ringClock(S.emission_progress, String(rem).padStart(2, "0"))}</div>
       <div class="grid stats">
-        <div class="card stat"><span>Minutes lived</span><b>${(S.minutes_lived || 0).toLocaleString()}</b></div>
+        <div class="card stat"><span>Minutes</span><b>${(S.minutes_lived || 0).toLocaleString()}</b></div>
         <div class="card stat"><span>Issued</span><b>${fmtXferShort(S.issued_atoms)}</b></div>
         <div class="card stat"><span>Lifetime</span><b>${fmtXferShort(S.lifetime_atoms)}</b></div>
-        <div class="card stat"><span>Next ½</span><b>${(S.years_to_halving || 0).toLocaleString()} yr</b></div>
-        <div class="card stat"><span>Paydays</span><b>${(S.paydays || 0).toLocaleString()}</b></div>
-        <div class="card stat"><span>Unique @wins</span><b>${S.unique_winners || 0}</b></div>
+        <div class="card stat"><span>Next halving</span><b>${(S.years_to_halving || 0).toLocaleString()} yr</b></div>
+        <div class="card stat"><span>Draws</span><b>${(S.paydays || 0).toLocaleString()}</b></div>
+        <div class="card stat"><span>Winners</span><b>${S.unique_winners || 0}</b></div>
         <div class="card stat"><span>Top handle</span><b>${((S.top_handle_share || 0) * 100).toFixed(1)}%</b></div>
-        <div class="card stat"><span>HHI</span><b>${(S.hhi || 0).toFixed(3)}</b></div>
+        <div class="card stat" title="Win concentration. Near 1 means one handle won most minutes."><span>HHI</span><b>${(S.hhi || 0).toFixed(3)}</b></div>
       </div>
     </div>
     <div class="card" style="margin-bottom:16px">
-      <h2>156-year staircase</h2>
-      <p class="muted">Subsidy halves every 2,100,000 minutes (~4 years). Each step is one era. The lit step is now. Winner count that minute rises by one at each ½.</p>
+      <h2>Subsidy schedule</h2>
+      <p class="muted">The subsidy halves every 2,100,000 minutes (about 4 years), across about 156 years. The lit step is the current era. Each halving adds one winner that minute.</p>
       ${eraStairs(S.eras, S.height)}
-      <p class="muted" style="margin-top:10px">Era ${S.era} · ${fmtXferShort(S.subsidy_atoms)} / minute · next ½ at height ${(S.next_halving_height || 0).toLocaleString()} · last payday ${Number(S.last_paying_height || 0).toLocaleString()}</p>
-      <div class="launch-strip" title="Height 0 is unspendable genesis. Height 1+ is the lottery."><i></i><i></i></div>
-      <p class="muted">Black = genesis (no premine). Gold = every minute after is a public draw.</p>
+      <p class="muted" style="margin-top:10px">Era ${S.era} · ${fmtXferShort(S.subsidy_atoms)} / minute · next halving at height ${(S.next_halving_height || 0).toLocaleString()} · last paying height ${Number(S.last_paying_height || 0).toLocaleString()}</p>
+      <div class="launch-strip" title="Height 0 is genesis and pays nothing. Height 1 is the first draw."><i></i><i></i></div>
+      <p class="muted">Black is genesis (no payout). Gold is every later minute, a public draw.</p>
     </div>
     <div class="grid two">
       <div class="card">
         <h2>The hat</h2>
-        <p class="muted">Distance from center is minutes won. One @handle is one ticket. Click a star.</p>
+        <p class="muted">Farther from the center means more wins. Each dot is one @handle. Click a name.</p>
         ${hatConstellation(S.handles)}
       </div>
       <div class="card">
-        <h2>Luck vs the math</h2>
-        <p class="muted">Blue is the fair share (1 / hat size each minute they stood in). Gold is minutes actually paid. Near 0% luck means the draw looks honest.</p>
+        <h2>Luck</h2>
+        <p class="muted">Blue is the fair share: 1 divided by hat size, for each minute in the hat. Gold is minutes actually paid.</p>
         ${luckRows(S.handles)}
       </div>
     </div>
     <div class="grid two" style="margin-top:16px">
       <div class="card">
         <h2>Hat pulse</h2>
-        <p class="muted">How many XVA1 handles were in the hat each of the last ${ (S.hat_pulse || []).length } minutes.</p>
+        <p class="muted">Handles in the hat over the last ${ (S.hat_pulse || []).length } minutes.</p>
         ${pulseChart(S.hat_pulse)}
       </div>
       <div class="card">
-        <h2>Identity ecology</h2>
+        <h2>Assets</h2>
         <div class="kind-pills">
           ${kinds.map((k) => `<div class="kind-pill"><b>${k.n}</b><span>${esc(k.kind || "asset")}</span></div>`).join("") || `<div class="empty">No assets yet.</div>`}
           <div class="kind-pill"><b>${(S.assets && S.assets.ipfs) || 0}</b><span>IPFS</span></div>
@@ -1458,7 +1459,7 @@ async function pageNetwork() {
       <div class="kv">
         <b>Chain</b><div>${esc(s?.network_label || "mainnet")}</div>
         <b>Ticker</b><div>XFER</div>
-        <b>P2P id</b><div>XFER — 4 bytes on every peer message so this chain is not mixed with Bitcoin or Ravencoin</div>
+        <b>P2P id</b><div>XFER. Four bytes on each peer message, so this chain stays separate from Bitcoin and Ravencoin.</div>
         <b>RPC</b><div>${s?.rpc_connected ? `connected :${s.rpc_port}` : "offline"}</div>
         <b>Best hash</b><div>${idHtml(chain.bestblockhash || s?.best_hash || "")}</div>
         <b>Verification</b><div>${chain.verificationprogress != null ? (chain.verificationprogress * 100).toFixed(2) + "%" : "—"}</div>
@@ -1475,7 +1476,7 @@ async function pageNetwork() {
             <td>${esc(x.subver)}</td>
             <td>${x.inbound ? "in" : "out"}</td>
             <td>${x.synced_blocks ?? x.startingheight ?? "—"}</td>
-          </tr>`).join("") || `<tr><td colspan="4" class="empty">No peers (or RPC off).</td></tr>`}
+          </tr>`).join("") || `<tr><td colspan="4" class="empty">No peers.</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -1591,13 +1592,13 @@ function tradeMoved(t) {
 
 function tradeStatus(t) {
   if (t.tokens_pending) {
-    return `<span class="trade-status" title="The buy is in. The treasury has not delivered the tokens yet"><i class="dot wait"></i> Tokens on the way</span>`;
+    return `<span class="trade-status" title="Buy is in. Tokens are not delivered yet."><i class="dot wait"></i> Tokens on the way</span>`;
   }
   if (t.confirmed) {
     const n = t.confirmations ? ` · ${t.confirmations}` : "";
-    return `<span class="trade-status" title="Confirmed means locked into the chain"><i class="dot ok"></i> Confirmed${n}</span>`;
+    return `<span class="trade-status" title="In a block."><i class="dot ok"></i> Confirmed${n}</span>`;
   }
-  return `<span class="trade-status" title="This trade is not in a block yet"><i class="dot wait"></i> Confirming</span>`;
+  return `<span class="trade-status" title="Not in a block yet."><i class="dot wait"></i> Confirming</span>`;
 }
 
 function tradeCard(t, extra) {
@@ -1610,7 +1611,7 @@ function tradeCard(t, extra) {
   return `<article class="${cls}" id="trade-${esc(t.txid)}">
     <div class="trade-top">
       <span class="badge ${t.side === "sell" ? "sell" : "buy"}">${t.side === "sell" ? "SELL" : "BUY"}</span>
-      ${t.venue === "book" ? `<span class="badge" title="Filled through the Launch order book (and the curve where it was cheaper)">BOOK</span>` : ""}
+      ${t.venue === "book" ? `<span class="badge" title="Filled by the Launch order book.">BOOK</span>` : ""}
       <div class="trade-sentence">${tradeSentence(t)}</div>
       ${tradeStatus(t)}
     </div>
@@ -1718,7 +1719,7 @@ async function pageTrades() {
   tradeView = { side, q, items: [] };
   app.innerHTML = `
     <h1 class="page-title">Trades</h1>
-    <p class="sub">Showing today's trades since 12:00 AM ET. Older trades are still on the chain; open any tx, block or address to see them. Confirmed means the trade is locked into the chain. Tokens on the way means the buy is in and the treasury has not delivered the tokens yet. BOOK marks a trade filled through the Launch order book.</p>
+    <p class="sub">Today’s Launch trades, since midnight ET. Older ones stay on the chain. Confirmed means the trade is in a block. Tokens on the way means the tokens are not delivered yet. BOOK means the order book filled it.</p>
     <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
     <div class="toolbar">
       <div class="tabs" id="trade-tabs">

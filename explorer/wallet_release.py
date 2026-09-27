@@ -1,6 +1,6 @@
 """Pick an official X Coin wallet zip from GitHub Releases.
 
-Works with Light and Heavy, including tags like v1.0.16-light.
+Works with Light and Heavy, including tags that end in -light or -heavy.
 Does not trust GitHub's "latest" flag (that can stay on an older Light
 release while a newer Heavy exists).
 """
@@ -26,7 +26,7 @@ _WINDOWS_NAME = re.compile(r"^X-Coin-.+-Windows\.zip$")
 
 
 def parse_version(tag: str) -> tuple[int, ...] | None:
-    """v1.0.16, 1.0.16-light, v1.0.16-heavy → (1, 0, 16)."""
+    """v1.2.3, 1.2.3-light, v1.2.3-heavy → (1, 2, 3)."""
     s = (tag or "").strip()
     if s[:1] in "vV":
         s = s[1:]

@@ -46,7 +46,7 @@ XID1 = b"XID1"
 RVN_PREFIX = b"rvn"
 
 BURN_ADDRESSES_MAIN = {
-    "XissueAssetXXXXXXXXXXXXXXXXXXwTyxt": "issue root (removed — protocol identity only)",
+    "XissueAssetXXXXXXXXXXXXXXXXXXwTyxt": "issue root",
     "XreissueAssetXXXXXXXXXXXXXXXZNfDqa": "reissue",
     "XissueSubAssetXXXXXXXXXXXXXXcHkFpF": "issue sub (100 XFER)",
     "XissueUniqueAssetXXXXXXXXXXXagKZDZ": "issue unique (5 XFER)",

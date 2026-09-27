@@ -4,12 +4,11 @@ This explorer is a **website on your computer**. It does not hold coins. It
 reads a running **X Coin wallet / node** and shows blocks, assets, lottery
 winners, and eligible `@handles` in a browser.
 
-You need **X Coin 1.0.13+** (Light or Heavy). Same chain. Setup picks the
-newest official zip from Releases, including tags like `v1.0.16-light`.
-Do not stay on 1.0.12 if you need Claim My Asset to confirm. 1.0.13
-peers still follow this chain. **Share lottery wins** (host/guest split
-of a mature payout) is a wallet send — guests never enter the hat.
-Market listings in Heavy are wallet gossip, not explorer consensus.
+You need the [latest X Coin release](https://github.com/NiftyRaven/x-coin/releases)
+(Light or Heavy). Same chain. Setup downloads the newest official zip.
+**Share lottery wins** (a host/guest split of a mature payout) is a later
+wallet send. Guests never enter the hat. Market listings in Heavy are
+wallet gossip, not chain data.
 
 ---
 
@@ -31,7 +30,7 @@ Market listings in Heavy are wallet gossip, not explorer consensus.
   **latest official** Windows zip from
   [NiftyRaven/x-coin Releases](https://github.com/NiftyRaven/x-coin/releases)
   into `%LOCALAPPDATA%\XCoin-Wallet\<version>` (highest version tag with
-  a zip; Light `v1.0.16-light` parses as 1.0.16)
+  a zip; a Light tag such as `vX.Y.Z-light` is read as X.Y.Z)
 - Add only these **template** lines to the wallet config (no passwords):
 
   ```
@@ -77,7 +76,7 @@ If the wallet is already installed somewhere else, set
 | Item | Why |
 | --- | --- |
 | **Windows** or **Linux x86_64** | What the wallet supports |
-| **X Coin wallet 1.0.13+ Light or Heavy** | [github.com/NiftyRaven/x-coin/releases](https://github.com/NiftyRaven/x-coin/releases) |
+| **Latest X Coin release, Light or Heavy** | [github.com/NiftyRaven/x-coin/releases](https://github.com/NiftyRaven/x-coin/releases) |
 | **Python 3.11 or newer** | Runs the explorer |
 | A web browser | Chrome, Firefox, Edge, … |
 
@@ -176,10 +175,9 @@ uses the folder above, not `regtest`.
 
 ### 3c. Put `server=1` where the wallet actually reads it
 
-**X Coin 1.0.13+** (Light and Heavy) double-click reads
-the `xcoin.conf` **next to** `X Coin Wallet.exe` (Windows) or **X Coin
-Wallet** (Linux). If that file has no `server=1`, port 38442 never opens
-and the explorer shows “node offline”.
+A double-click reads the `xcoin.conf` **next to** `X Coin Wallet.exe`
+(Windows) or **X Coin Wallet** (Linux). If that file has no `server=1`,
+port 38442 never opens and the explorer shows “node offline”.
 
 Do this in **every** `xcoin.conf` you have:
 

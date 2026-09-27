@@ -1,4 +1,4 @@
-"""1.0.14 host/guest lottery share — wallet send, not consensus.
+"""Host/guest lottery share — a wallet send, not a consensus rule.
 
 Matches x-coin src/hostshare.cpp GuestPot / GuestShare. A verified host
 sends a percent of a mature lottery coinbase, split equally among guests.
@@ -41,7 +41,7 @@ def detect_host_share(
     host_address: str | None,
     outputs: list[tuple[str | None, int]],
 ) -> dict | None:
-    """Return share fields when outputs look like a 1.0.14 guest split."""
+    """Return share fields when outputs look like an equal guest split."""
     guests: list[tuple[str | None, int]] = []
     for addr, amt in outputs:
         if amt <= 0:

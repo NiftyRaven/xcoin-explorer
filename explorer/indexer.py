@@ -29,7 +29,7 @@ from explorer.trades import ROUTE_TAG, _memo_text, decode_fill_memo, decode_rout
 
 # Bump to force a full XVA1 rebuild of lottery_wins / lottery_active.
 LOTTERY_INDEX_V = "4"
-# Bump to re-scan indexed spends for 1.0.14 host/guest share-outs.
+# Bump to re-scan indexed spends for host/guest share-outs.
 SHARE_INDEX_V = "1"
 
 
@@ -328,7 +328,7 @@ class Indexer:
         self.db.commit()
 
     def _rebuild_shares(self) -> None:
-        """Tag already-indexed spends that match 1.0.14 guest-split math."""
+        """Tag already-indexed spends that match guest-split math."""
         if self.db.get_meta("share_v") == SHARE_INDEX_V:
             return
         self.db.conn.execute("DELETE FROM lottery_share_guests")

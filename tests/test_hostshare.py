@@ -1,4 +1,4 @@
-"""1.0.14 host/guest share math and indexer tagging."""
+"""Host/guest share math and indexer tagging."""
 
 from pathlib import Path
 
