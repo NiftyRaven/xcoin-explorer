@@ -42,14 +42,21 @@ function copyButton(text) {
   return `<button type="button" class="copy-btn" data-copy="${esc(full)}">Copy</button>`;
 }
 
+function idBody(value, cls, href) {
+  return href
+    ? `<a class="${cls}" href="${esc(href)}">${esc(value)}</a>`
+    : `<span class="${cls}">${esc(value)}</span>`;
+}
+
 function idHtml(text, opts = {}) {
   const full = text == null ? "" : String(text);
   if (!full) return `<span class="faint">—</span>`;
+  const href = opts.href ? String(opts.href) : "";
   const shown = clipMiddle(full, opts.left || 10, opts.right || 8);
-  const inner = opts.href
-    ? `<a class="mono-clip" href="${esc(opts.href)}" title="${esc(full)}">${esc(shown)}</a>`
-    : `<span class="mono-clip" title="${esc(full)}">${esc(shown)}</span>`;
-  return `<span class="id-line">${inner}${copyButton(full)}</span>`;
+  if (opts.full || shown === full) {
+    return `<span class="id-line id-open"><span class="id-full">${idBody(full, "id-full-text break-anywhere", href)}</span>${copyButton(full)}</span>`;
+  }
+  return `<span class="id-line can-expand">${idBody(shown, "mono-clip", href)}<span class="id-full">${idBody(full, "id-full-text break-anywhere", href)}</span><button type="button" class="copy-btn id-toggle" data-id-toggle aria-expanded="false">Full</button>${copyButton(full)}</span>`;
 }
 
 function copyText(text) {
@@ -240,19 +247,21 @@ function fmtTime(ts) {
 }
 
 function linkBlock(h) { return `<a href="#/block/${h}">${h}</a>`; }
-function linkTx(id) {
+function linkTx(id, opts = {}) {
   if (!id) return `<span class="faint">—</span>`;
-  return idHtml(id, { href: "#/tx/" + encodeURIComponent(id) });
+  return idHtml(id, { href: "#/tx/" + encodeURIComponent(id), full: !!opts.full });
 }
-function linkAddr(a) {
+function linkAddr(a, opts = {}) {
   if (!a) return `<span class="faint">—</span>`;
-  return idHtml(a, { href: "#/address/" + encodeURIComponent(a), left: 8, right: 6 });
+  return idHtml(a, { href: "#/address/" + encodeURIComponent(a), left: 8, right: 6, full: !!opts.full });
+}
+function assetApiPath(name) {
+  return "/asset/" + String(name || "").split("/").map((part) => encodeURIComponent(part)).join("/");
 }
 function linkAsset(n) {
   if (!n) return "—";
   const full = String(n);
-  const shown = full.length > 28 ? clipMiddle(full, 16, 8) : full;
-  return `<span class="id-line"><a class="break-anywhere" href="#/asset/${encodeURIComponent(full)}" title="${esc(full)}">${esc(shown)}</a>${copyButton(full)}</span>`;
+  return idHtml(full, { href: "#/asset/" + encodeURIComponent(full), left: 16, right: 8 });
 }
 function handle(h) {
   if (!h) return "";
@@ -276,10 +285,22 @@ function setNav() {
 }
 
 function copyable(text) {
-  return idHtml(text);
+  return idHtml(text, { full: true });
 }
 
 document.addEventListener("click", (e) => {
+  const toggle = e.target.closest("[data-id-toggle]");
+  if (toggle) {
+    e.preventDefault();
+    e.stopPropagation();
+    const line = toggle.closest(".id-line");
+    if (!line) return;
+    const open = !line.classList.contains("id-open");
+    line.classList.toggle("id-open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.textContent = open ? "Hide" : "Full";
+    return;
+  }
   const el = e.target.closest("[data-copy], [data-copy-from]");
   if (el) {
     e.preventDefault();
@@ -756,11 +777,11 @@ async function pageBlock(key) {
     <h1 class="page-title">Block ${b.height}</h1>
     <div class="card" style="margin-bottom:16px">
       <div class="kv">
-        <b>Hash</b><div>${idHtml(b.hash, { href: "#/block/" + encodeURIComponent(b.hash) })}</div>
+        <b>Hash</b><div>${idHtml(b.hash, { href: "#/block/" + encodeURIComponent(b.hash), full: true })}</div>
         <b>Time</b><div>${fmtTime(b.time)} · ${timeAgo(b.time)}</div>
-        <b>Previous</b><div>${b.prev ? idHtml(b.prev, { href: "#/block/" + encodeURIComponent(b.prev) }) : "—"}</div>
+        <b>Previous</b><div>${b.prev ? idHtml(b.prev, { href: "#/block/" + encodeURIComponent(b.prev), full: true }) : "—"}</div>
         <b>Slot</b><div>${b.lottery_slot ?? "—"}</div>
-        <b>Seed</b><div>${b.lottery_seed ? idHtml(b.lottery_seed) : "—"}</div>
+        <b>Seed</b><div>${b.lottery_seed ? idHtml(b.lottery_seed, { full: true }) : "—"}</div>
         <b>Subsidy</b><div>${atomsToXfer(b.subsidy)}</div>
         <b>Fees</b><div>${atomsToXfer(b.fees)}</div>
         <b>Size</b><div>${b.size} bytes · ${b.tx_count} tx</div>
@@ -783,7 +804,7 @@ async function pageBlock(key) {
           ${(b.txs || []).map((t) => `<tr>
             <td>${t.n}</td>
             <td>${linkTx(t.txid)}</td>
-            <td>${t.coinbase ? `<span class="badge lottery">coinbase</span>` : ""} ${t.identity ? `<span class="badge asset">identity @${esc(t.xid_handle)}</span>` : ""}</td>
+            <td>${t.coinbase ? `<span class="badge lottery">coinbase</span>` : ""}${t.identity ? ` <span class="badge asset">identity @${esc(t.xid_handle)}</span>` : ""}${!t.coinbase && !t.identity ? `<span class="faint">—</span>` : ""}</td>
             <td>${atomsToXfer(t.xfer_out)}</td>
           </tr>`).join("") || `<tr><td colspan="4" class="empty">No transactions in this block.</td></tr>`}
         </tbody>
@@ -791,23 +812,52 @@ async function pageBlock(key) {
     </div>`;
 }
 
+function rpcOutAddress(vout) {
+  const spk = (vout && vout.scriptPubKey) || {};
+  const addrs = spk.addresses || [];
+  return addrs[0] || "";
+}
+
 async function pageTx(id) {
   const t = await api("/tx/" + encodeURIComponent(id));
   if (t.unindexed) {
-    app.innerHTML = `<h1 class="page-title">Transaction</h1><div class="card"><p>On the node, not in the explorer index yet.</p><pre class="media-text break-anywhere">${esc(JSON.stringify(t.rpc, null, 2))}</pre></div>`;
+    const rpc = t.rpc || {};
+    const txid = rpc.txid || id;
+    const vin = (rpc.vin || []).map((v) => {
+      if (v.coinbase) return `<div><span class="badge lottery">coinbase</span></div>`;
+      const prev = v.txid ? `${linkTx(v.txid)}<span class="faint">:${esc(v.vout ?? "")}</span>` : `<span class="faint">input</span>`;
+      return `<div>${prev}</div>`;
+    }).join("");
+    const vout = (rpc.vout || []).map((v) => {
+      const spk = v.scriptPubKey || {};
+      const asset = spk.asset && spk.asset.name;
+      const who = spk.type === "nulldata" ? `<span class="badge">OP_RETURN</span>` : linkAddr(rpcOutAddress(v), { full: true });
+      const amt = asset ? esc(String(spk.asset.amount ?? "") + " " + asset) : (v.value != null ? esc(v.value) + " XFER" : "");
+      return `<div>${who}<div class="muted">${amt}</div></div>`;
+    }).join("");
+    app.innerHTML = `
+      <h1 class="page-title">Transaction</h1>
+      <p class="id-hero">${copyable(txid)}</p>
+      <p class="sub">On the node, not in the explorer index yet.</p>
+      <div class="io">
+        <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">No inputs.</div>`}</div>
+        <div class="arrow">→</div>
+        <div class="card"><h2>Outputs</h2>${vout || `<div class="empty">No outputs.</div>`}</div>
+      </div>
+      <details class="raw-json" style="margin-top:16px"><summary>Raw transaction</summary><pre class="media-text break-anywhere">${esc(JSON.stringify(rpc, null, 2))}</pre></details>`;
     return;
   }
-  const vin = (t.vin || []).map((v) => `<div>${v.coinbase ? `<span class="badge lottery">coinbase</span>` : linkAddr(v.address)}
+  const vin = (t.vin || []).map((v) => `<div>${v.coinbase ? `<span class="badge lottery">coinbase</span>` : linkAddr(v.address, { full: true })}
     <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + formatAssetAmount(v.asset_amount, v.asset) : atomsToXfer(v.value)}</div>
     ${v.spent_txid ? `<div class="faint">from ${linkTx(v.spent_txid)}:${v.spent_n}</div>` : ""}</div>`).join("");
-  const vout = (t.vout || []).map((v) => `<div>${v.script_type === "nulldata" ? `<span class="badge">OP_RETURN</span>` : linkAddr(v.address)}
+  const vout = (t.vout || []).map((v) => `<div>${v.script_type === "nulldata" ? `<span class="badge">OP_RETURN</span> ${v.op_return ? `<span class="break-anywhere">${esc(v.op_return)}</span>` : ""}` : linkAddr(v.address, { full: true })}
     <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + formatAssetAmount(v.asset_amount, v.asset) + ` <span class="badge asset">${esc(v.asset_kind || "")}</span>` : atomsToXfer(v.value)}</div></div>`).join("");
   app.innerHTML = `
     <h1 class="page-title">Transaction</h1>
-    <p class="sub">${copyable(t.txid)}</p>
+    <p class="id-hero">${copyable(t.txid)}</p>
     <div class="card" style="margin-bottom:16px">
       <div class="kv">
-        <b>Block</b><div>${t.height != null ? linkBlock(t.height) : "mempool"} ${t.block_hash ? idHtml(t.block_hash, { href: "#/block/" + encodeURIComponent(t.block_hash) }) : ""}</div>
+        <b>Block</b><div>${t.height != null ? linkBlock(t.height) : "mempool"} ${t.block_hash ? idHtml(t.block_hash, { href: "#/block/" + encodeURIComponent(t.block_hash), full: true }) : ""}</div>
         <b>Time</b><div>${fmtTime(t.time)}</div>
         <b>Fee</b><div>${t.coinbase ? "—" : atomsToXfer(t.fee)}</div>
         <b>Identity</b><div>${txIdentityHtml(t)}</div>
@@ -816,20 +866,28 @@ async function pageTx(id) {
     </div>
     ${t.host_share ? `<div class="card" style="margin-bottom:16px">
       <h2>Guests</h2>
-      ${(t.host_share.guests || []).map((g) => `<div class="winner"><div>${g.handle ? handle(g.handle) : linkAddr(g.address)}</div><div class="amt">${atomsToXfer(g.amount)}</div></div>`).join("") || `<div class="empty">No guest outputs.</div>`}
+      ${(t.host_share.guests || []).map((g) => `<div class="winner"><div>${g.handle ? handle(g.handle) : linkAddr(g.address, { full: true })}</div><div class="amt">${atomsToXfer(g.amount)}</div></div>`).join("") || `<div class="empty">No guest outputs.</div>`}
     </div>` : ""}
     <div class="io">
-      <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">None</div>`}</div>
+      <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">No inputs.</div>`}</div>
       <div class="arrow">→</div>
-      <div class="card"><h2>Outputs</h2>${vout || `<div class="empty">None</div>`}</div>
+      <div class="card"><h2>Outputs</h2>${vout || `<div class="empty">No outputs.</div>`}</div>
     </div>`;
+}
+
+function addressTxNet(t) {
+  const received = Number(t.addr_received || 0);
+  const sent = Number(t.addr_sent || 0);
+  if (!received && !sent) return `<span class="muted">${atomsToXfer(t.xfer_out)}</span>`;
+  const net = received - sent;
+  return `<span class="${net < 0 ? "amt-out" : "amt-in"}">${atomsToXfer(net)}</span>`;
 }
 
 async function pageAddress(addr) {
   const a = await api("/address/" + encodeURIComponent(addr));
   app.innerHTML = `
     <h1 class="page-title">Address</h1>
-    <p class="sub">${copyable(a.address)} ${a.burn ? `<span class="badge warn">${esc(a.burn)}</span>` : ""} ${a.identity ? `<span class="badge asset">${handle(a.identity.handle)}</span>` : ""}</p>
+    <p class="id-hero">${copyable(a.address)} ${a.burn ? `<span class="badge warn">${esc(a.burn)}</span>` : ""} ${a.identity ? `<span class="badge asset">${handle(a.identity.handle)}</span>` : ""}</p>
     <div class="grid stats">
       <div class="card stat"><span>Balance</span><b>${atomsToXfer(a.balance_atoms)}</b></div>
       <div class="card stat"><span>Received</span><b>${atomsToXfer(a.received_atoms)}</b></div>
@@ -840,7 +898,8 @@ async function pageAddress(addr) {
       <div class="card">
         <h2>Transactions</h2>
         <table>
-          <tbody>${(a.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${linkBlock(t.height)}</td><td>${atomsToXfer(t.xfer_out)}</td></tr>`).join("") || `<tr><td class="empty">No transactions.</td></tr>`}</tbody>
+          <thead><tr><th>Tx</th><th>Block</th><th>When</th><th>Net</th></tr></thead>
+          <tbody>${(a.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${t.height != null ? linkBlock(t.height) : "—"}</td><td class="muted">${timeAgo(t.time)}</td><td>${addressTxNet(t)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No transactions for this address.</td></tr>`}</tbody>
         </table>
       </div>
       <div>
@@ -1079,7 +1138,7 @@ function advanceIfPossible(el) {
 }
 
 async function pageAsset(name) {
-  const a = await api("/asset/" + encodeURIComponent(name));
+  const a = await api(assetApiPath(name));
   const meta = a.rpc || {};
   const units = meta.units ?? a.units ?? 0;
   const amountAtoms = meta.amount != null ? Math.round(Number(meta.amount) * 1e8) : a.amount;
@@ -1114,8 +1173,8 @@ async function pageAsset(name) {
           <b>Holders</b><div>${a.holder_count ?? (a.holders || []).length}</div>
           <b>Units</b><div>${esc(units)}</div>
           <b>Reissuable</b><div>${yesNo(meta.reissuable ?? a.reissuable)}</div>
-          <b>Created</b><div>${created}${a.created_txid ? " · " + linkTx(a.created_txid) : ""}</div>
-          <b>Issuer</b><div>${a.issuer ? linkAddr(a.issuer) : "—"}</div>
+          <b>Created</b><div>${created}${a.created_txid ? " · " + linkTx(a.created_txid, { full: true }) : ""}</div>
+          <b>Issuer</b><div>${a.issuer ? linkAddr(a.issuer, { full: true }) : "—"}</div>
           <b>IPFS</b><div>${cid ? copyable(cid) : `<span class="faint">none</span>`}</div>
         </div>
       </div>
@@ -1125,13 +1184,15 @@ async function pageAsset(name) {
       <div class="card">
         <h2>Holders</h2>
         <table>
-          ${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td class="empty">No holders.</td></tr>`}
+          <thead><tr><th>Address</th><th>Amount</th></tr></thead>
+          <tbody>${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">No holders.</td></tr>`}</tbody>
         </table>
       </div>
       <div class="card">
         <h2>Activity</h2>
         <table>
-          ${(a.activity || []).map((x) => `<tr><td>${linkBlock(x.height)}</td><td>${esc(x.kind)}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td class="empty">No activity.</td></tr>`}
+          <thead><tr><th>Block</th><th>Kind</th><th>Tx</th></tr></thead>
+          <tbody>${(a.activity || []).map((x) => `<tr><td>${x.height != null ? linkBlock(x.height) : "—"}</td><td>${esc(x.kind || "—")}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No activity.</td></tr>`}</tbody>
         </table>
       </div>
     </div>`;
@@ -1179,7 +1240,7 @@ async function pageIdentity(handleName) {
         <b>Handle</b><div>${handle(name)} ${memberStatusBadges(p)}</div>
         <b>In this minute’s hat</b><div>${yesNo(p.in_hat)}</div>
         <b>Heartbeat</b><div>${yesNo(p.heartbeat)}</div>
-        <b>Address</b><div>${p.address ? linkAddr(p.address) : `<span class="faint">—</span>`}</div>
+        <b>Address</b><div>${p.address ? linkAddr(p.address, { full: true }) : `<span class="faint">—</span>`}</div>
         <b>Asset root</b><div>${p.asset ? linkAsset(p.asset) : `<span class="faint">—</span>`}</div>
         <b>First hat</b><div>${p.first_hat != null ? linkBlock(p.first_hat) : "—"}</div>
         <b>Last hat</b><div>${p.last_hat != null ? linkBlock(p.last_hat) : "—"}</div>
@@ -1372,14 +1433,18 @@ async function pageRich() {
 
 async function pageMempool() {
   const m = await api("/mempool");
+  const offline = m.connected === false;
+  const summary = offline
+    ? "The node is offline, so unconfirmed transactions cannot be read."
+    : (m.info ? `${m.info.size || m.count || 0} tx · ${m.info.bytes || 0} bytes` : "Unconfirmed transactions.");
   app.innerHTML = `
     <h1 class="page-title">Mempool</h1>
-    <p class="sub">${m.info ? `${m.info.size || m.count || 0} tx · ${m.info.bytes || 0} bytes` : "Node mempool"}</p>
+    <p class="sub">${summary}</p>
     <div class="card">
       <table>
         <thead><tr><th>Txid</th><th>Vin</th><th>Vout</th></tr></thead>
         <tbody>
-          ${(m.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${t.vin ?? "—"}</td><td>${t.vout ?? "—"}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">Empty.</td></tr>`}
+          ${(m.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${t.vin ?? "—"}</td><td>${t.vout ?? "—"}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">${offline ? "No node is connected." : "No unconfirmed transactions."}</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -1461,7 +1526,7 @@ async function pageNetwork() {
         <b>Ticker</b><div>XFER</div>
         <b>P2P id</b><div>XFER. Four bytes on each peer message, so this chain stays separate from Bitcoin and Ravencoin.</div>
         <b>RPC</b><div>${s?.rpc_connected ? `connected :${s.rpc_port}` : "offline"}</div>
-        <b>Best hash</b><div>${idHtml(chain.bestblockhash || s?.best_hash || "")}</div>
+        <b>Best hash</b><div>${idHtml(chain.bestblockhash || s?.best_hash || "", { full: true })}</div>
         <b>Verification</b><div>${chain.verificationprogress != null ? (chain.verificationprogress * 100).toFixed(2) + "%" : "—"}</div>
         <b>P2P</b><div>port 38443 · no DNS seeds · peers join with addnode/seednode</div>
       </div>
@@ -1476,20 +1541,34 @@ async function pageNetwork() {
             <td>${esc(x.subver)}</td>
             <td>${x.inbound ? "in" : "out"}</td>
             <td>${x.synced_blocks ?? x.startingheight ?? "—"}</td>
-          </tr>`).join("") || `<tr><td colspan="4" class="empty">No peers.</td></tr>`}
+          </tr>`).join("") || `<tr><td colspan="4" class="empty">${p.connected === false ? "The node is offline, so peers cannot be listed." : "No peers connected."}</td></tr>`}
         </tbody>
       </table>
     </div>`;
+}
+
+function recordHref(r) {
+  const id = r && r.id != null ? String(r.id) : "";
+  if (r.type === "tx") return "#/tx/" + encodeURIComponent(id);
+  if (r.type === "block") return "#/block/" + encodeURIComponent(id);
+  if (r.type === "address") return "#/address/" + encodeURIComponent(id);
+  if (r.type === "asset") return "#/asset/" + encodeURIComponent(id);
+  if (r.type === "identity") return "#/identity/" + encodeURIComponent(id);
+  if (r.type === "node") {
+    if (r.address) return "#/address/" + encodeURIComponent(r.address);
+    const label = String(r.label || "");
+    if (label.startsWith("@") && label.length > 1) return "#/identity/" + encodeURIComponent(label.slice(1));
+  }
+  return "";
 }
 
 async function pageSearch(q) {
   const data = await api("/search?q=" + encodeURIComponent(q));
   const results = data.results || [];
   if (results.length === 1) {
-    const r = results[0];
-    const map = { block: "block", tx: "tx", address: "address", asset: "asset", identity: "identity" };
-    if (map[r.type]) {
-      location.hash = `#/${map[r.type]}/${encodeURIComponent(r.id)}`;
+    const href = recordHref(results[0]);
+    if (href) {
+      location.hash = href;
       return;
     }
   }
@@ -1498,12 +1577,13 @@ async function pageSearch(q) {
     <p class="sub">${esc(q)} · ${esc(data.kind)}</p>
     <div class="card">
       ${results.map((r) => {
-        const kind = r.type === "tx" ? "tx" : r.type === "block" ? "block" : r.type === "address" ? "address" : r.type === "asset" ? "asset" : "identity";
-        const href = `#/${kind}/${encodeURIComponent(r.id)}`;
-        return `<div class="winner"><div class="id-line"><span class="badge">${esc(r.type)}</span>
-        <a class="break-anywhere" href="${href}" title="${esc(r.label)}">${esc(r.label)}</a>
-        ${copyButton(r.id || r.label)}
-      </div></div>`;
+        const href = recordHref(r);
+        const primary = (r.type === "tx" || r.type === "address" || r.type === "block") ? (r.id || r.label) : (r.label || r.id);
+        const link = href
+          ? `<a class="id-full-text break-anywhere" href="${href}">${esc(primary)}</a>`
+          : `<span class="id-full-text break-anywhere">${esc(primary)}</span>`;
+        const extra = primary !== r.label && r.label ? `<div class="muted">${esc(r.label)}</div>` : "";
+        return `<div class="winner"><div><div class="id-line"><span class="badge">${esc(r.type)}</span>${link}${copyButton(r.id || r.label)}</div>${extra}</div></div>`;
       }).join("") || `<div class="empty">Nothing matched that search.</div>`}
     </div>`;
 }
@@ -1618,10 +1698,10 @@ function tradeCard(t, extra) {
     <p class="trade-moved">${tradeMoved(t)}</p>
     <div class="trade-links">
       ${when}
-      <div class="trade-link"><span class="faint">Tx</span>${linkTx(t.txid)}</div>
+      <div class="trade-link stack"><span class="faint">Tx</span>${linkTx(t.txid, { full: true })}</div>
       <div class="trade-link"><span class="faint">Block</span><span class="id-line">${block}</span></div>
       <div class="trade-link"><span class="faint">Asset</span>${linkAsset(t.asset)}</div>
-      <div class="trade-link"><span class="faint">${whoLabel}</span>${linkAddr(t.trader)}</div>
+      <div class="trade-link stack"><span class="faint">${whoLabel}</span>${linkAddr(t.trader, { full: true })}</div>
     </div>
   </article>`;
 }
@@ -1635,19 +1715,39 @@ function tradeStatsHtml(s) {
   </div>`;
 }
 
-function renderTradeList() {
-  const list = $("#trade-list");
-  if (!list || !tradeView) return;
-  const items = tradeView.items || [];
-  list.innerHTML = items.length
-    ? items.map((t) => tradeCard(t)).join("")
-    : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet today."}</div></div>`;
+function tradeRecency(t) {
+  const txid = String(t.txid || "");
+  const time = Number(t.time) || 0;
+  const n = t.n == null || t.n === "" ? -1 : Number(t.n);
+  const nKey = Number.isFinite(n) ? n : -1;
+  if (t.height == null || t.height === "") return [1, time, nKey, txid];
+  const height = Number(t.height);
+  return [0, Number.isFinite(height) ? height : -1, nKey, txid];
 }
 
-function htmlToNode(html) {
-  const wrap = document.createElement("div");
-  wrap.innerHTML = html.trim();
-  return wrap.firstElementChild;
+function compareTradesNewest(a, b) {
+  const ka = tradeRecency(a);
+  const kb = tradeRecency(b);
+  for (let i = 0; i < 3; i++) {
+    if (ka[i] !== kb[i]) return kb[i] - ka[i];
+  }
+  if (ka[3] === kb[3]) return 0;
+  return ka[3] < kb[3] ? 1 : -1;
+}
+
+function sortTradesNewest(items) {
+  return (items || []).slice().sort(compareTradesNewest);
+}
+
+function renderTradeList(freshIds) {
+  const list = $("#trade-list");
+  if (!list || !tradeView) return;
+  const items = sortTradesNewest(tradeView.items || []);
+  tradeView.items = items;
+  const fresh = freshIds instanceof Set ? freshIds : new Set();
+  list.innerHTML = items.length
+    ? items.map((t) => tradeCard(t, fresh.has(t.txid) ? "trade-in" : "")).join("")
+    : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet today."}</div></div>`;
 }
 
 async function refreshTradeHead() {
@@ -1656,48 +1756,17 @@ async function refreshTradeHead() {
   if (!hash.startsWith("#/trades")) return;
   try {
     const data = await api(tradeQuery(tradeView.side, tradeView.q));
+    if ((location.hash || "") !== hash) return;
     const stats = $("#trade-stats");
     if (stats) stats.outerHTML = tradeStatsHtml(data.stats);
+    const prev = new Set((tradeView.items || []).map((t) => t.txid));
     const incoming = data.items || [];
-    const incomingIds = new Set(incoming.map((t) => t.txid));
-    // Midnight ET drops yesterday. The server list is the whole day, so remove cards it no longer returns.
-    for (const prev of tradeView.items || []) {
-      if (!incomingIds.has(prev.txid)) {
-        const el = document.getElementById("trade-" + prev.txid);
-        if (el) el.remove();
-      }
-    }
-    tradeView.items = (tradeView.items || []).filter((t) => incomingIds.has(t.txid));
-    const seen = new Map(tradeView.items.map((t) => [t.txid, t]));
-    const fresh = [];
+    const fresh = new Set();
     for (const t of incoming) {
-      const prev = seen.get(t.txid);
-      if (!prev) {
-        fresh.push(t);
-        continue;
-      }
-      if (prev.confirmed !== t.confirmed || prev.confirmations !== t.confirmations || prev.height !== t.height || prev.tokens_pending !== t.tokens_pending || prev.delivery_txid !== t.delivery_txid) {
-        Object.assign(prev, t);
-        const el = document.getElementById("trade-" + t.txid);
-        const node = htmlToNode(tradeCard(t));
-        if (el && node) el.replaceWith(node);
-      }
+      if (t.txid && !prev.has(t.txid)) fresh.add(t.txid);
     }
-    if (!(tradeView.items || []).length && !fresh.length) {
-      renderTradeList();
-    } else if (fresh.length) {
-      tradeView.items = fresh.concat(tradeView.items || []);
-      const list = $("#trade-list");
-      const empty = list && list.querySelector(".empty");
-      if (empty) {
-        renderTradeList();
-      } else if (list) {
-        fresh.slice().reverse().forEach((t) => {
-          const node = htmlToNode(tradeCard(t, "trade-in"));
-          if (node) list.insertBefore(node, list.firstChild);
-        });
-      }
-    }
+    tradeView.items = incoming;
+    renderTradeList(fresh);
   } catch {
     /* next poll retries */
   }
@@ -1719,7 +1788,7 @@ async function pageTrades() {
   tradeView = { side, q, items: [] };
   app.innerHTML = `
     <h1 class="page-title">Trades</h1>
-    <p class="sub">Today’s Launch trades, since midnight ET. Older ones stay on the chain. Confirmed means the trade is in a block. Tokens on the way means the tokens are not delivered yet. BOOK means the order book filled it.</p>
+    <p class="sub">Today’s Launch trades, since midnight ET. Buys and sells are listed together, newest first. Use Buys or Sells to filter. Older ones stay on the chain. Confirmed means the trade is in a block. Tokens on the way means the tokens are not delivered yet. BOOK means the order book filled it.</p>
     <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
     <div class="toolbar">
       <div class="tabs" id="trade-tabs">

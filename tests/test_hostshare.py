@@ -129,6 +129,9 @@ def test_index_share_from_mature_win(tmp_path: Path):
     assert guest_p["shares_received"][0]["host_handle"] == "humble_miner"
     addr = q.address(guest)
     assert addr["guest_shares"][0]["host_handle"] == "humble_miner"
+    assert addr["txs"][0]["txid"] == share_txid
+    assert addr["txs"][0]["addr_received"] == pot
+    assert addr["txs"][0]["addr_sent"] == 0
     assert q.recent_shares(5)[0]["txid"] == share_txid
     db.close()
 

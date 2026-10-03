@@ -459,6 +459,33 @@ def _tx_after_key(view: dict) -> tuple:
     return (int(height), int(view.get("n") or 0), view.get("txid") or "")
 
 
+def _public_newest_key(row: dict) -> tuple:
+    """Sort key for the public trades list. Larger values are newer.
+
+    Unconfirmed rows have no height and sit above every confirmed trade.
+    Confirmed rows follow chain order: block height, then position in the block.
+    Buys and sells share this key so the default list is one mixed feed.
+    """
+    txid = str(row.get("txid") or "")
+    try:
+        when = int(row.get("time") or 0)
+    except (TypeError, ValueError):
+        when = 0
+    raw_n = row.get("n")
+    try:
+        n = int(raw_n) if raw_n is not None else -1
+    except (TypeError, ValueError):
+        n = -1
+    height = row.get("height")
+    if height is None:
+        return (1, when, n, txid)
+    try:
+        height_i = int(height)
+    except (TypeError, ValueError):
+        height_i = -1
+    return (0, height_i, n, txid)
+
+
 def _lone_sell_memo(view: dict) -> bool:
     memos = _fill_memos(view)
     return len(memos) == 1 and memos[0].get("side") == "sell"
@@ -1466,6 +1493,9 @@ class TradeFeed:
                 elif base:
                     sells.append((view, base))
         found = buys + sells
+        # Classification walks buys before sells so a delivery can teach the
+        # reserve. The page is one list: newest transaction first, sides mixed.
+        found.sort(key=lambda pair: _public_newest_key(pair[0]), reverse=True)
         handles = self._handles([base["trader"] for _, base in found])
         return [self._decorate(base, view, handles) for view, base in found]
 
@@ -1697,7 +1727,10 @@ class TradeFeed:
         q: str = "",
         now: int | None = None,
     ) -> dict:
-        """Today's Launch trades, newest first. No history before 12:00 AM ET."""
+        """Today's Launch trades, buys and sells mixed, newest first.
+
+        No history before 12:00 AM ET. ``side`` filters to buys or sells.
+        """
         moment = int(time.time() if now is None else now)
         start, end, key = self._begin_day(moment)
         side = side if side in ("buy", "sell") else "all"
@@ -1717,6 +1750,7 @@ class TradeFeed:
                 continue
             seen.add(txid)
             items.append(trade)
+        items.sort(key=_public_newest_key, reverse=True)
         return {
             "items": items,
             "stats": self.stats(now=moment, pending=pending),

@@ -272,14 +272,23 @@ class Queries:
             row_to_dict(r)
             for r in self.db.conn.execute(
                 """
-                SELECT DISTINCT t.*
+                SELECT t.*,
+                  (
+                    SELECT COALESCE(SUM(value), 0) FROM txio
+                    WHERE txid = t.txid AND address = ? AND direction = 'out'
+                  ) AS addr_received,
+                  (
+                    SELECT COALESCE(SUM(value), 0) FROM txio
+                    WHERE txid = t.txid AND address = ? AND direction = 'in'
+                  ) AS addr_sent
                 FROM txs t
-                JOIN txio io ON io.txid = t.txid
-                WHERE io.address=?
-                ORDER BY t.height DESC, t.n DESC
+                WHERE EXISTS (
+                  SELECT 1 FROM txio io WHERE io.txid = t.txid AND io.address = ?
+                )
+                ORDER BY t.height IS NULL DESC, t.height DESC, t.n DESC
                 LIMIT ?
                 """,
-                (addr, limit),
+                (addr, addr, addr, limit),
             ).fetchall()
         ]
         wins = [
