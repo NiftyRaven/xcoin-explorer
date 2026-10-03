@@ -274,7 +274,9 @@ td .id-line { max-width: min(100%, 260px); }
   grid-template-columns: minmax(280px, 1.15fr) minmax(260px, 0.85fr);
   gap: 16px;
   margin-bottom: 16px;
+  align-items: start;
 }
+.asset-hero .receipt { margin-bottom: 0; }
 @media (max-width: 900px) { .asset-hero { grid-template-columns: 1fr; } }
 
 .media-card { padding: 0; overflow: hidden; }
@@ -320,6 +322,16 @@ td .id-line { max-width: min(100%, 260px); }
   overflow-wrap: anywhere;
   max-width: 100%;
 }
+.receipt { margin-bottom: 16px; }
+.receipt h2 { margin-top: 0; }
+.receipt-lines { margin: 8px 0 0; padding-left: 18px; }
+.receipt-lines li { margin: 8px 0; line-height: 1.5; }
+.receipt-where, .receipt-next { color: var(--muted); margin: 12px 0 0; line-height: 1.45; }
+.chain-detail { margin: 8px 0 16px; }
+.chain-detail-body { margin-top: 12px; }
+.search-hit { align-items: flex-start; }
+.search-open { white-space: nowrap; font-weight: 600; }
+.home-lead { margin-top: 0; }
 .raw-json { margin-top: 14px; }
 .raw-json summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .raw-json summary:hover { color: var(--text); }

@@ -508,24 +508,24 @@ function statsRow() {
   const counts = s.counts || {};
   return `
     <div class="grid stats">
-      <div class="card stat"><span>Height</span><b>${s.tip ?? "—"}</b></div>
-      <div class="card stat"><span>Supply</span><b>${atomsToXfer(s.supply_atoms)}</b></div>
-      <div class="card stat"><span>Next subsidy</span><b>${atomsToXfer(s.subsidy_atoms)}</b></div>
+      <div class="card stat"><span>Latest block</span><b>${s.tip ?? "—"}</b></div>
+      <div class="card stat"><span>XFER issued</span><b>${atomsToXfer(s.supply_atoms)}</b></div>
+      <div class="card stat"><span>Next reward</span><b>${atomsToXfer(s.subsidy_atoms)}</b></div>
       <div class="card stat"><span>Assets</span><b>${counts.assets ?? 0}</b></div>
-      <div class="card stat"><span>Lottery wins</span><b>${counts.wins ?? 0}</b></div>
-      <div class="card stat"><span>Peers</span><b>${s.peer_count ?? "—"}</b></div>
+      <div class="card stat"><span>Draws paid</span><b>${counts.wins ?? 0}</b></div>
+      <div class="card stat"><span>Nodes connected</span><b>${s.peer_count ?? "—"}</b></div>
     </div>`;
 }
 
 function winnerWho(w) {
   if (w && w.xaccount) return handle(w.xaccount);
-  return `<span class="faint">no XVA1</span>`;
+  return `<span class="faint">no name on the payout</span>`;
 }
 
 function blockWinner(b) {
   if (b && b.winner_handle) return handle(b.winner_handle);
   if (b && b.height === 0) return "—";
-  return `<span class="faint">no XVA1</span>`;
+  return `<span class="faint">no name on the payout</span>`;
 }
 
 function txIdentityHtml(t) {
@@ -550,7 +550,7 @@ function lotteryCard(live, nodes, winnerHandles, activeCount) {
   const n = Math.max(mapped.length, (L.winners || []).length);
   const rows = n
     ? Array.from({ length: n }, (_, i) => {
-        const who = mapped[i] ? handle(mapped[i]) : `<span class="faint">no XVA1</span>`;
+        const who = mapped[i] ? handle(mapped[i]) : `<span class="faint">no name on the payout</span>`;
         return `<div class="winner"><div class="who"><span class="badge lottery">winner</span> ${who}</div><div class="amt">${atomsToXfer(rewards[i] || 0)}</div></div>`;
       }).join("")
     : `<div class="empty">No eligible nodes in this draw yet.</div>`;
@@ -563,15 +563,18 @@ function lotteryCard(live, nodes, winnerHandles, activeCount) {
       : ((nodes || []).length || 0);
   const slot = L.slot;
   const winnerN = L.winner_count ?? 1;
+  const people = activeN === 1 ? "1 person is" : activeN === 0 ? "No one is" : `${activeN} people are`;
+  const paid = Number(winnerN) === 1 ? "This draw pays 1 person" : `This draw pays ${winnerN} people`;
   return `
     <div class="card">
-      <h2>This minute’s lottery</h2>
+      <h2>This minute’s draw</h2>
       <div class="countdown" id="cd">—:—</div>
-      <p class="muted">Height ${L.height ?? "—"} · slot ${slot ?? "—"} · ${activeN} active · ${winnerN} winner${Number(winnerN) === 1 ? "" : "s"}</p>
+      <p class="muted">Block ${L.height ?? "—"}. ${people} in this draw. ${paid}.</p>
       ${rows}
+      <details class="raw-json"><summary>Draw numbers</summary><p class="muted">Slot ${slot ?? "—"} · ${activeN} active · ${winnerN} winner${Number(winnerN) === 1 ? "" : "s"}</p></details>
       <div class="row-actions">
-        <a href="#/lottery">Full lottery →</a>
-        <a href="#/members">Eligible members →</a>
+        <a href="#/lottery">Open this draw</a>
+        <a href="#/members">See who can be paid</a>
       </div>
     </div>`;
 }
@@ -707,6 +710,17 @@ function luckRows(handles) {
   }).join("");
 }
 
+function homeLead(blocks, lottery) {
+  const latest = (lottery.history || [])[0];
+  const paid = latest && (latest.winners || [])[0];
+  if (latest && paid && (paid.amount || paid.xaccount)) {
+    return `The latest paid minute is block ${linkBlock(latest.height)}. ${winnerWho(paid)} received ${atomsToXfer(paid.amount)}. Open the block to see that payout, or open Trades to see buys and sells.`;
+  }
+  const tip = (blocks.items || [])[0];
+  if (tip) return `The latest block is ${linkBlock(tip.height)}. Open it to see who was paid and which payments are inside.`;
+  return "No blocks are indexed yet.";
+}
+
 async function pageHome() {
   const [blocks, lottery] = await Promise.all([
     api("/blocks?limit=12"),
@@ -719,12 +733,14 @@ async function pageHome() {
   }).join("");
   app.innerHTML = `
     ${nodeBanner()}
+    <p class="sub home-lead">${homeLead(blocks, lottery)}</p>
     ${statsRow()}
     <div class="grid home" style="margin-top:16px">
       <div class="card">
         <h2>Latest blocks</h2>
+        <p class="muted">Each row is one minute. Open a block to see who was paid.</p>
         <table>
-          <thead><tr><th>Height</th><th>Time</th><th>Tx</th><th>Winner</th></tr></thead>
+          <thead><tr><th>Block</th><th>When</th><th>Payments</th><th>Paid</th></tr></thead>
           <tbody>
             ${(blocks.items || []).map((b) => `<tr>
               <td>${linkBlock(b.height)}</td>
@@ -734,15 +750,16 @@ async function pageHome() {
             </tr>`).join("") || `<tr><td colspan="4" class="empty">No blocks yet.</td></tr>`}
           </tbody>
         </table>
-        <div class="row-actions"><a href="#/blocks">All blocks →</a></div>
+        <div class="row-actions"><a href="#/blocks">See every block</a></div>
       </div>
       ${lotteryCard(lottery.live, lottery.nodes, lottery.winner_handles, lottery.active_count)}
     </div>
     <div class="card" style="margin-top:16px">
-      <h2>Recent lottery winners</h2>
+      <h2>Who was paid</h2>
+      <p class="muted">The draw pays one or more @handles each minute. Open a block for the full payout.</p>
       <table>
-        <thead><tr><th>Block</th><th>Winner</th><th>Reward</th><th>When</th></tr></thead>
-        <tbody>${recentWins || `<tr><td colspan="4" class="empty">Winners start at height 1.</td></tr>`}</tbody>
+        <thead><tr><th>Block</th><th>Paid to</th><th>Amount</th><th>When</th></tr></thead>
+        <tbody>${recentWins || `<tr><td colspan="4" class="empty">Payouts start at block 1.</td></tr>`}</tbody>
       </table>
     </div>`;
   tickCountdown();
@@ -770,46 +787,196 @@ async function pageBlocks() {
     </div>`;
 }
 
+function receiptCard(lines, where) {
+  const items = (lines || []).filter(Boolean);
+  const body = items.length
+    ? `<ul class="receipt-lines">${items.map((html) => `<li>${html}</li>`).join("")}</ul>`
+    : `<p class="receipt-line">The explorer has no payment it can describe here.</p>`;
+  return `<div class="card receipt"><h2>What happened</h2>${body}${where ? `<p class="receipt-where">${where}</p>` : ""}</div>`;
+}
+
+function chainDetail(body, summary) {
+  const label = summary || "Inputs, outputs, and chain detail";
+  return `<details class="raw-json chain-detail"><summary>${label}</summary><div class="chain-detail-body">${body}</div></details>`;
+}
+
+function assetLinkPlain(name) {
+  const full = String(name || "");
+  if (!full) return "—";
+  return `<a class="break-anywhere" href="#/asset/${encodeURIComponent(full)}">${esc(full)}</a>`;
+}
+
+function personHtml(address, handleName) {
+  if (handleName) return handle(handleName);
+  if (address) {
+    const shown = clipMiddle(address, 8, 6);
+    return `<a class="mono-clip" href="#/address/${encodeURIComponent(address)}" title="${esc(address)}">${esc(shown)}</a>`;
+  }
+  return `<span class="faint">an address this explorer does not have</span>`;
+}
+
+function legAmount(row) {
+  if (!row) return "";
+  if (row.asset) return `${formatAssetAmount(row.asset_amount, "")} ${assetLinkPlain(row.asset)}`;
+  if (Number(row.value)) return atomsToXfer(row.value);
+  return "";
+}
+
+function readableNote(text) {
+  const s = String(text || "").trim();
+  if (!s || s.length > 160) return "";
+  if (s.includes("|")) return "";
+  const hex = s.replace(/\s/g, "");
+  if (/^[0-9a-fA-F]+$/.test(hex) && hex.length >= 16) return "";
+  return s;
+}
+
+function indexedReceipt(t) {
+  const lines = [];
+  if (t.coinbase) {
+    if (Number(t.height) === 0) {
+      lines.push("This is the first block. It paid nothing.");
+    } else {
+      if (t.winner_handle) lines.push(`The draw named ${personHtml(null, t.winner_handle)}.`);
+      const outs = (t.vout || []).filter((v) => v.asset || Number(v.value));
+      if (!outs.length) lines.push("This payout did not include an amount the explorer could read.");
+      for (const v of outs) {
+        const amt = legAmount(v);
+        const who = v.address ? personHtml(v.address) : (t.winner_handle ? personHtml(null, t.winner_handle) : `<span class="faint">no name on the payout</span>`);
+        if (amt) lines.push(`Paid ${amt} to ${who}.`);
+      }
+    }
+  } else if (t.host_share) {
+    const s = t.host_share;
+    const host = s.host_handle ? personHtml(null, s.host_handle) : personHtml(s.host_address);
+    const fromBlock = s.host_height != null ? linkBlock(s.host_height) : "an earlier block";
+    lines.push(`${host} shared ${esc(s.guest_percent)}% of a win from block ${fromBlock}. ${esc(s.guest_count)} guest${Number(s.guest_count) === 1 ? "" : "s"} received ${atomsToXfer(s.pot_amount)} altogether.`);
+    for (const g of s.guests || []) {
+      const who = g.handle ? personHtml(null, g.handle) : personHtml(g.address);
+      lines.push(`${who} received ${atomsToXfer(g.amount)}.`);
+    }
+  } else {
+    const sent = new Map();
+    for (const v of t.vin || []) {
+      if (v.coinbase) continue;
+      const amt = legAmount(v);
+      if (!amt) continue;
+      const key = v.address || "";
+      if (!sent.has(key)) sent.set(key, []);
+      sent.get(key).push(amt);
+    }
+    for (const [addr, amts] of sent) {
+      lines.push(`${personHtml(addr)} sent ${amts.join(", ")}.`);
+    }
+    for (const v of t.vout || []) {
+      if (v.script_type === "nulldata") {
+        const note = readableNote(v.op_return);
+        lines.push(note ? `A note on this transaction says “${esc(note)}”.` : "A note was written on this transaction. The exact text is in chain detail.");
+        continue;
+      }
+      const amt = legAmount(v);
+      if (!amt && !v.address) continue;
+      const who = personHtml(v.address);
+      lines.push(amt ? `${who} received ${amt}.` : `${who} is named, with no amount recorded.`);
+    }
+    if (t.xid_handle) lines.push(`This transaction names ${personHtml(null, t.xid_handle)}.`);
+    if (Number(t.fee) > 0) lines.push(`The fee was ${atomsToXfer(t.fee)}.`);
+  }
+  const where = t.height != null
+    ? `In block ${linkBlock(t.height)}${t.time ? ` · ${esc(fmtTime(t.time))}` : ""}. Open the block, or any name above.`
+    : `Not in a block yet${t.time ? ` · ${esc(fmtTime(t.time))}` : ""}. Open any name above.`;
+  return receiptCard(lines, where);
+}
+
+function rpcReceipt(rpc) {
+  const lines = [];
+  const vins = rpc.vin || [];
+  const vouts = rpc.vout || [];
+  if (vins.some((v) => v.coinbase)) lines.push("These are new coins from a block. This explorer has not indexed the transaction yet.");
+  for (const v of vins) {
+    if (v.coinbase) continue;
+    if (v.txid) lines.push(`This spent an output from ${linkTx(v.txid)}. The amount is in chain detail.`);
+  }
+  for (const v of vouts) {
+    const spk = v.scriptPubKey || {};
+    if (spk.type === "nulldata") {
+      lines.push("A note was written on this transaction. The exact text is in chain detail.");
+      continue;
+    }
+    const asset = spk.asset && spk.asset.name;
+    const who = rpcOutAddress(v) ? personHtml(rpcOutAddress(v)) : `<span class="faint">an address this explorer does not have</span>`;
+    if (asset && spk.asset.amount != null && spk.asset.amount !== "") {
+      lines.push(`${who} received ${esc(String(spk.asset.amount))} ${linkAsset(asset)}.`);
+    } else if (asset) {
+      lines.push(`${who} received ${linkAsset(asset)}.`);
+    } else if (v.value != null) {
+      lines.push(`${who} received ${esc(v.value)} XFER.`);
+    }
+  }
+  if (!lines.length) lines.push("The node returned this transaction, and the explorer has not indexed it yet.");
+  return receiptCard(lines, "Open chain detail for every input and output.");
+}
+
+function blockReceipt(b) {
+  const wins = (b.lottery && b.lottery.winners) || [];
+  const lines = [];
+  if (Number(b.height) === 0) {
+    lines.push("This is the first block. It paid nothing.");
+  } else if (!wins.length) {
+    lines.push("No one was paid on this block.");
+  } else {
+    for (const w of wins) {
+      lines.push(`The draw paid ${atomsToXfer(w.amount)} to ${winnerWho(w)}.`);
+    }
+  }
+  const n = (b.txs || []).length || Number(b.tx_count) || 0;
+  if (n) lines.push(`${n} payment${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} in this block. Open one below to see who sent what.`);
+  else lines.push("No payments are in this block.");
+  const when = b.time ? `${esc(fmtTime(b.time))} · ${timeAgo(b.time)}` : "";
+  return receiptCard(lines, when);
+}
+
 async function pageBlock(key) {
   const b = await api("/block/" + encodeURIComponent(key));
   const wins = (b.lottery && b.lottery.winners) || [];
+  const named = wins.filter((w) => w.xaccount).map((w) => handle(w.xaccount));
   app.innerHTML = `
     <h1 class="page-title">Block ${b.height}</h1>
+    ${blockReceipt(b)}
     <div class="card" style="margin-bottom:16px">
-      <div class="kv">
-        <b>Hash</b><div>${idHtml(b.hash, { href: "#/block/" + encodeURIComponent(b.hash), full: true })}</div>
-        <b>Time</b><div>${fmtTime(b.time)} · ${timeAgo(b.time)}</div>
-        <b>Previous</b><div>${b.prev ? idHtml(b.prev, { href: "#/block/" + encodeURIComponent(b.prev), full: true }) : "—"}</div>
-        <b>Slot</b><div>${b.lottery_slot ?? "—"}</div>
-        <b>Seed</b><div>${b.lottery_seed ? idHtml(b.lottery_seed, { full: true }) : "—"}</div>
-        <b>Subsidy</b><div>${atomsToXfer(b.subsidy)}</div>
-        <b>Fees</b><div>${atomsToXfer(b.fees)}</div>
-        <b>Size</b><div>${b.size} bytes · ${b.tx_count} tx</div>
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:16px">
-      <h2>Lottery winners</h2>
+      <h2>Who was paid</h2>
       ${wins.length ? wins.map((w) => `<div class="winner">
-        <div class="who">${w.rank === 0 ? `<span class="badge lottery">winner</span>` : `<span class="badge">#${(w.rank || 0) + 1}</span>`}
+        <div class="who">${w.rank === 0 ? `<span class="badge lottery">paid</span>` : `<span class="badge">also paid</span>`}
           ${winnerWho(w)}
         </div>
         <div class="amt">${atomsToXfer(w.amount)}</div>
-      </div>`).join("") : `<div class="empty">${b.height === 0 ? "Genesis has no lottery." : "No winners on this block."}</div>`}
+      </div>`).join("") : `<div class="empty">${b.height === 0 ? "The first block paid nothing." : "No one was paid on this block."}</div>`}
     </div>
-    <div class="card">
-      <h2>Transactions</h2>
+    <div class="card" style="margin-bottom:16px">
+      <h2>Payments in this block</h2>
+      <p class="muted">Open a transaction to read who sent what.</p>
       <table>
-        <thead><tr><th>#</th><th>Txid</th><th>Type</th><th>Out</th></tr></thead>
+        <thead><tr><th>#</th><th>Transaction</th><th>What</th><th>XFER out</th></tr></thead>
         <tbody>
           ${(b.txs || []).map((t) => `<tr>
             <td>${t.n}</td>
             <td>${linkTx(t.txid)}</td>
-            <td>${t.coinbase ? `<span class="badge lottery">coinbase</span>` : ""}${t.identity ? ` <span class="badge asset">identity @${esc(t.xid_handle)}</span>` : ""}${!t.coinbase && !t.identity ? `<span class="faint">—</span>` : ""}</td>
+            <td>${t.coinbase ? `<span class="badge lottery">Block reward</span>` : ""}${t.identity ? ` <span class="badge asset">${handle(t.xid_handle)}</span>` : ""}${!t.coinbase && !t.identity ? `<span class="faint">—</span>` : ""}</td>
             <td>${atomsToXfer(t.xfer_out)}</td>
           </tr>`).join("") || `<tr><td colspan="4" class="empty">No transactions in this block.</td></tr>`}
         </tbody>
       </table>
-    </div>`;
+    </div>
+    ${chainDetail(`<div class="card"><div class="kv">
+        <b>Hash</b><div>${idHtml(b.hash, { href: "#/block/" + encodeURIComponent(b.hash), full: true })}</div>
+        <b>Previous</b><div>${b.prev ? idHtml(b.prev, { href: "#/block/" + encodeURIComponent(b.prev), full: true }) : "—"}</div>
+        <b>Slot</b><div>${b.lottery_slot ?? "—"}</div>
+        <b>Seed</b><div>${b.lottery_seed ? idHtml(b.lottery_seed, { full: true }) : "—"}</div>
+        <b>Names</b><div>${named.length ? named.join(" ") : `<span class="faint">no XVA1</span>`}</div>
+        <b>Reward</b><div>${atomsToXfer(b.subsidy)}</div>
+        <b>Fees</b><div>${atomsToXfer(b.fees)}</div>
+        <b>Size</b><div>${b.size} bytes · ${b.tx_count} tx</div>
+      </div></div>`, "Chain detail")}`;
 }
 
 function rpcOutAddress(vout) {
@@ -824,40 +991,43 @@ async function pageTx(id) {
     const rpc = t.rpc || {};
     const txid = rpc.txid || id;
     const vin = (rpc.vin || []).map((v) => {
-      if (v.coinbase) return `<div><span class="badge lottery">coinbase</span></div>`;
-      const prev = v.txid ? `${linkTx(v.txid)}<span class="faint">:${esc(v.vout ?? "")}</span>` : `<span class="faint">input</span>`;
+      if (v.coinbase) return `<div><span class="badge lottery">Block reward</span></div>`;
+      const prev = v.txid ? `${linkTx(v.txid, { full: true })}<span class="faint">:${esc(v.vout ?? "")}</span>` : `<span class="faint">input</span>`;
       return `<div>${prev}</div>`;
     }).join("");
     const vout = (rpc.vout || []).map((v) => {
       const spk = v.scriptPubKey || {};
       const asset = spk.asset && spk.asset.name;
-      const who = spk.type === "nulldata" ? `<span class="badge">OP_RETURN</span>` : linkAddr(rpcOutAddress(v), { full: true });
+      const who = spk.type === "nulldata" ? `<span class="badge">Note</span> ${spk.asm ? `<span class="break-anywhere">${esc(spk.asm)}</span>` : ""}` : linkAddr(rpcOutAddress(v), { full: true });
       const amt = asset ? esc(String(spk.asset.amount ?? "") + " " + asset) : (v.value != null ? esc(v.value) + " XFER" : "");
       return `<div>${who}<div class="muted">${amt}</div></div>`;
     }).join("");
     app.innerHTML = `
       <h1 class="page-title">Transaction</h1>
       <p class="id-hero">${copyable(txid)}</p>
-      <p class="sub">On the node, not in the explorer index yet.</p>
-      <div class="io">
+      <p class="sub">The node has this transaction. The explorer index does not, yet.</p>
+      ${rpcReceipt(rpc)}
+      ${chainDetail(`<div class="io">
         <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">No inputs.</div>`}</div>
         <div class="arrow">→</div>
         <div class="card"><h2>Outputs</h2>${vout || `<div class="empty">No outputs.</div>`}</div>
       </div>
-      <details class="raw-json" style="margin-top:16px"><summary>Raw transaction</summary><pre class="media-text break-anywhere">${esc(JSON.stringify(rpc, null, 2))}</pre></details>`;
+      <details class="raw-json" style="margin-top:16px"><summary>Raw transaction</summary><pre class="media-text break-anywhere">${esc(JSON.stringify(rpc, null, 2))}</pre></details>`)}`;
     return;
   }
-  const vin = (t.vin || []).map((v) => `<div>${v.coinbase ? `<span class="badge lottery">coinbase</span>` : linkAddr(v.address, { full: true })}
+  const vin = (t.vin || []).map((v) => `<div>${v.coinbase ? `<span class="badge lottery">Block reward</span>` : linkAddr(v.address, { full: true })}
     <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + formatAssetAmount(v.asset_amount, v.asset) : atomsToXfer(v.value)}</div>
     ${v.spent_txid ? `<div class="faint">from ${linkTx(v.spent_txid)}:${v.spent_n}</div>` : ""}</div>`).join("");
-  const vout = (t.vout || []).map((v) => `<div>${v.script_type === "nulldata" ? `<span class="badge">OP_RETURN</span> ${v.op_return ? `<span class="break-anywhere">${esc(v.op_return)}</span>` : ""}` : linkAddr(v.address, { full: true })}
-    <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + formatAssetAmount(v.asset_amount, v.asset) + ` <span class="badge asset">${esc(v.asset_kind || "")}</span>` : atomsToXfer(v.value)}</div></div>`).join("");
+  const vout = (t.vout || []).map((v) => `<div>${v.script_type === "nulldata" ? `<span class="badge">Note</span> ${v.op_return ? `<span class="break-anywhere">${esc(v.op_return)}</span>` : ""}` : linkAddr(v.address, { full: true })}
+    <div class="muted">${v.asset ? linkAsset(v.asset) + " · " + formatAssetAmount(v.asset_amount, v.asset) + (v.asset_kind ? ` <span class="badge asset">${esc(v.asset_kind)}</span>` : "") : atomsToXfer(v.value)}</div></div>`).join("");
   app.innerHTML = `
     <h1 class="page-title">Transaction</h1>
     <p class="id-hero">${copyable(t.txid)}</p>
+    ${indexedReceipt(t)}
+    ${chainDetail(`
     <div class="card" style="margin-bottom:16px">
       <div class="kv">
-        <b>Block</b><div>${t.height != null ? linkBlock(t.height) : "mempool"} ${t.block_hash ? idHtml(t.block_hash, { href: "#/block/" + encodeURIComponent(t.block_hash), full: true }) : ""}</div>
+        <b>Block</b><div>${t.height != null ? linkBlock(t.height) : "not in a block yet"} ${t.block_hash ? idHtml(t.block_hash, { href: "#/block/" + encodeURIComponent(t.block_hash), full: true }) : ""}</div>
         <b>Time</b><div>${fmtTime(t.time)}</div>
         <b>Fee</b><div>${t.coinbase ? "—" : atomsToXfer(t.fee)}</div>
         <b>Identity</b><div>${txIdentityHtml(t)}</div>
@@ -872,7 +1042,7 @@ async function pageTx(id) {
       <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">No inputs.</div>`}</div>
       <div class="arrow">→</div>
       <div class="card"><h2>Outputs</h2>${vout || `<div class="empty">No outputs.</div>`}</div>
-    </div>`;
+    </div>`)}`;
 }
 
 function addressTxNet(t) {
@@ -883,36 +1053,50 @@ function addressTxNet(t) {
   return `<span class="${net < 0 ? "amt-out" : "amt-in"}">${atomsToXfer(net)}</span>`;
 }
 
+function addressReceipt(a) {
+  const lines = [];
+  if (a.identity && a.identity.handle) lines.push(`This address is ${handle(a.identity.handle)}.`);
+  if (a.burn) lines.push(`This is a special chain address: ${esc(a.burn)}.`);
+  lines.push(`It holds ${atomsToXfer(a.balance_atoms)}.`);
+  const assets = a.assets || [];
+  if (!assets.length) lines.push("It holds no named assets.");
+  for (const x of assets) lines.push(`It holds ${formatAssetAmount(x.amount, "")} ${assetLinkPlain(x.name)}.`);
+  lines.push(`Altogether it has received ${atomsToXfer(a.received_atoms)} and sent ${atomsToXfer(a.sent_atoms)}.`);
+  const wins = (a.lottery_wins || []).length;
+  if (wins) lines.push(`The draw paid this address ${wins} time${wins === 1 ? "" : "s"}. Open a block in the list to see that minute.`);
+  const n = (a.txs || []).length;
+  if (n) lines.push(`${n} payment${n === 1 ? "" : "s"} below. Open one to see who sent what.`);
+  else lines.push("No payments for this address are indexed yet.");
+  return receiptCard(lines, "A positive amount means this address received more XFER than it sent in that payment.");
+}
+
 async function pageAddress(addr) {
   const a = await api("/address/" + encodeURIComponent(addr));
   app.innerHTML = `
     <h1 class="page-title">Address</h1>
-    <p class="id-hero">${copyable(a.address)} ${a.burn ? `<span class="badge warn">${esc(a.burn)}</span>` : ""} ${a.identity ? `<span class="badge asset">${handle(a.identity.handle)}</span>` : ""}</p>
-    <div class="grid stats">
-      <div class="card stat"><span>Balance</span><b>${atomsToXfer(a.balance_atoms)}</b></div>
-      <div class="card stat"><span>Received</span><b>${atomsToXfer(a.received_atoms)}</b></div>
-      <div class="card stat"><span>Sent</span><b>${atomsToXfer(a.sent_atoms)}</b></div>
-      <div class="card stat"><span>Lottery wins</span><b>${(a.lottery_wins || []).length}</b></div>
-    </div>
-    <div class="grid two" style="margin-top:16px">
+    <p class="id-hero">${copyable(a.address)} ${a.identity ? handle(a.identity.handle) : ""}</p>
+    ${addressReceipt(a)}
+    <div class="grid two">
       <div class="card">
-        <h2>Transactions</h2>
+        <h2>Payments</h2>
+        <p class="muted">Open a transaction for the full receipt.</p>
         <table>
-          <thead><tr><th>Tx</th><th>Block</th><th>When</th><th>Net</th></tr></thead>
+          <thead><tr><th>Transaction</th><th>Block</th><th>When</th><th>For this address</th></tr></thead>
           <tbody>${(a.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${t.height != null ? linkBlock(t.height) : "—"}</td><td class="muted">${timeAgo(t.time)}</td><td>${addressTxNet(t)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No transactions for this address.</td></tr>`}</tbody>
         </table>
       </div>
       <div>
         <div class="card" style="margin-bottom:16px">
-          <h2>Assets</h2>
-          ${(a.assets || []).map((x) => `<div class="winner"><div>${linkAsset(x.name)}</div><div class="amt">${formatAssetAmount(x.amount, x.name)}</div></div>`).join("") || `<div class="empty">No assets.</div>`}
+          <h2>Assets held here</h2>
+          ${(a.assets || []).map((x) => `<div class="winner"><div>${linkAsset(x.name)}</div><div class="amt">${formatAssetAmount(x.amount, x.name)}</div></div>`).join("") || `<div class="empty">No named assets.</div>`}
         </div>
         <div class="card">
-          <h2>Lottery</h2>
-          ${(a.lottery_wins || []).map((w) => `<div class="winner"><div>${linkBlock(w.height)} ${w.xaccount ? handle(w.xaccount) : `<span class="faint">no XVA1</span>`}</div><div class="amt">${atomsToXfer(w.amount)}</div></div>`).join("") || `<div class="empty">No wins.</div>`}
+          <h2>Draw payouts</h2>
+          ${(a.lottery_wins || []).map((w) => `<div class="winner"><div>${linkBlock(w.height)} ${winnerWho(w)}</div><div class="amt">${atomsToXfer(w.amount)}</div></div>`).join("") || `<div class="empty">This address has not been paid by the draw.</div>`}
         </div>
         ${(a.guest_shares || []).length ? `<div class="card" style="margin-top:16px">
-          <h2>Guest shares received</h2>
+          <h2>Guest payments received</h2>
+          <p class="muted">A host sent part of a mature win. Open the transaction to see the split.</p>
           ${a.guest_shares.map((s) => `<div class="winner"><div>${linkTx(s.txid)} ${s.host_handle ? handle(s.host_handle) : ""} <span class="badge guest">${s.guest_percent}%</span></div><div class="amt">${atomsToXfer(s.amount)}</div></div>`).join("")}
         </div>` : ""}
       </div>
@@ -1137,62 +1321,80 @@ function advanceIfPossible(el) {
   return true;
 }
 
+function assetKindWords(kind) {
+  const k = String(kind || "").toLowerCase();
+  if (k === "root") return "This is a main asset";
+  if (k === "sub") return "This is a sub-asset";
+  if (k === "unique") return "This is a one-of-a-kind token";
+  if (k === "owner") return "This is an owner token";
+  if (kind) return `This is ${esc(kind)}`;
+  return "This is an asset";
+}
+
+function activityWords(kind) {
+  const k = String(kind || "").toLowerCase();
+  if (k === "new") return "Created";
+  if (k === "reissue") return "More issued";
+  if (k === "transfer") return "Sent";
+  if (k === "owner") return "Owner token";
+  if (!kind) return "—";
+  return esc(kind);
+}
+
 async function pageAsset(name) {
   const a = await api(assetApiPath(name));
   const meta = a.rpc || {};
   const units = meta.units ?? a.units ?? 0;
   const amountAtoms = meta.amount != null ? Math.round(Number(meta.amount) * 1e8) : a.amount;
   const cid = assetCid(a);
-  const created = a.created_height != null ? linkBlock(a.created_height) : "—";
+  const created = a.created_height != null ? linkBlock(a.created_height) : "";
+  const holders = a.holder_count ?? (a.holders || []).length;
+  const lines = [];
+  lines.push(`${assetKindWords(a.kind)} named ${esc(a.name)}. ${formatAssetAmount(amountAtoms, "", units)} exist.`);
+  if (a.x_handle) lines.push(`It is tied to ${handle(a.x_handle)}.`);
+  if (a.identity?.address) lines.push(`That name’s address is ${linkAddr(a.identity.address, { full: true })}.`);
+  if (a.issuer) lines.push(`Created by ${linkAddr(a.issuer, { full: true })}${created ? ` in block ${created}` : ""}.`);
+  else if (created) lines.push(`Created in block ${created}.`);
+  if (a.created_txid) lines.push(`The creation transaction is ${linkTx(a.created_txid, { full: true })}.`);
+  lines.push(holders ? `${holders} ${holders === 1 ? "address holds" : "addresses hold"} it. Open one below.` : "No address holds it right now.");
+  if (!cid) lines.push("No file is attached.");
   app.innerHTML = `
     <p class="crumb"><a href="#/assets">Assets</a> / ${esc(a.name)}</p>
     <h1 class="page-title">${esc(a.name)}</h1>
-    <p class="sub">
-      <span class="badge asset">${esc(a.kind || "")}</span>
-      ${cid ? `<span class="badge ipfs">IPFS</span>` : ""}
-      ${a.x_handle ? handle(a.x_handle) : ""}
-      ${a.identity?.address ? linkAddr(a.identity.address) : ""}
-    </p>
     <div class="asset-hero">
       <div class="card media-card">
         <div id="asset-media">${cid ? renderMediaStage(null, cid) : `
           <div class="media-stage">
             <div class="media-empty">
-              <span class="badge">no IPFS</span>
+              <span class="badge">No file</span>
               <p>This asset has no file attached.</p>
             </div>
           </div>`}</div>
         <div class="media-caption" id="asset-media-cap">${cid ? captionHtml(cid, "") : "No file attached."}</div>
       </div>
-      <div class="card">
-        <h2>Asset</h2>
-        <div class="kv">
-          <b>Name</b><div class="break-anywhere">${esc(a.name)}</div>
-          <b>Kind</b><div>${esc(a.kind || "—")}</div>
-          <b>Amount</b><div>${formatAssetAmount(amountAtoms, a.name, units)}</div>
-          <b>Holders</b><div>${a.holder_count ?? (a.holders || []).length}</div>
-          <b>Units</b><div>${esc(units)}</div>
-          <b>Reissuable</b><div>${yesNo(meta.reissuable ?? a.reissuable)}</div>
-          <b>Created</b><div>${created}${a.created_txid ? " · " + linkTx(a.created_txid, { full: true }) : ""}</div>
-          <b>Issuer</b><div>${a.issuer ? linkAddr(a.issuer, { full: true }) : "—"}</div>
-          <b>IPFS</b><div>${cid ? copyable(cid) : `<span class="faint">none</span>`}</div>
-        </div>
-      </div>
+      ${receiptCard(lines, "Open a holder to see that address, or a row under History to open the transaction.")}
     </div>
     <div id="asset-nft"></div>
+    ${chainDetail(`<div class="card"><div class="kv">
+      <b>Kind</b><div>${esc(a.kind || "—")}</div>
+      <b>Units</b><div>${esc(units)}</div>
+      <b>More can be issued</b><div>${yesNo(meta.reissuable ?? a.reissuable)}</div>
+      <b>File id</b><div>${cid ? copyable(cid) : `<span class="faint">none</span>`}</div>
+    </div></div>`, "Chain detail")}
     <div class="grid two">
-      <div class="card">
-        <h2>Holders</h2>
+      <div class="card" id="asset-holders">
+        <h2>Who holds it</h2>
         <table>
           <thead><tr><th>Address</th><th>Amount</th></tr></thead>
           <tbody>${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">No holders.</td></tr>`}</tbody>
         </table>
       </div>
       <div class="card">
-        <h2>Activity</h2>
+        <h2>History</h2>
+        <p class="muted">Open a transaction to see who sent this asset.</p>
         <table>
-          <thead><tr><th>Block</th><th>Kind</th><th>Tx</th></tr></thead>
-          <tbody>${(a.activity || []).map((x) => `<tr><td>${x.height != null ? linkBlock(x.height) : "—"}</td><td>${esc(x.kind || "—")}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No activity.</td></tr>`}</tbody>
+          <thead><tr><th>Block</th><th>What</th><th>Transaction</th></tr></thead>
+          <tbody>${(a.activity || []).map((x) => `<tr><td>${x.height != null ? linkBlock(x.height) : "—"}</td><td>${activityWords(x.kind)}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No activity.</td></tr>`}</tbody>
         </table>
       </div>
     </div>`;
@@ -1383,7 +1585,7 @@ async function pageLottery() {
           <thead><tr><th>Who</th><th>Wins</th><th>Earned</th></tr></thead>
           <tbody>
             ${(L.leaders || []).map((x) => `<tr>
-              <td>${x.xaccount ? handle(x.xaccount) : `<span class="faint">no XVA1</span>`}</td>
+              <td>${winnerWho(x)}</td>
               <td>${x.wins}</td><td>${atomsToXfer(x.earned)}</td>
             </tr>`).join("") || `<tr><td colspan="3" class="empty">No winners yet.</td></tr>`}
           </tbody>
@@ -1562,6 +1764,26 @@ function recordHref(r) {
   return "";
 }
 
+function searchWords(r) {
+  if (r.type === "tx") return "Transaction";
+  if (r.type === "address") return "Address";
+  if (r.type === "block") return "Block";
+  if (r.type === "asset") return "Asset";
+  if (r.type === "identity") return "@handle";
+  if (r.type === "node") return "Payout";
+  return "Result";
+}
+
+function searchBlurb(r) {
+  if (r.type === "tx") return "Open it to see who sent what, and which asset moved.";
+  if (r.type === "address") return "Open it to see the balance, the assets, and the payments.";
+  if (r.type === "block") return "Open it to see who was paid this minute.";
+  if (r.type === "asset") return "Open it to see how many exist and who holds them.";
+  if (r.type === "identity") return "Open this name to see wins and the address.";
+  if (r.type === "node") return "Open the address or @handle for this payout.";
+  return "Open this record.";
+}
+
 async function pageSearch(q) {
   const data = await api("/search?q=" + encodeURIComponent(q));
   const results = data.results || [];
@@ -1574,18 +1796,19 @@ async function pageSearch(q) {
   }
   app.innerHTML = `
     <h1 class="page-title">Search</h1>
-    <p class="sub">${esc(q)} · ${esc(data.kind)}</p>
+    <p class="sub">${results.length ? `${results.length} match${results.length === 1 ? "" : "es"} for “${esc(q)}”. Open one.` : `Nothing matched “${esc(q)}”. Try a block number, an address, an asset name, or an @handle.`}</p>
     <div class="card">
       ${results.map((r) => {
         const href = recordHref(r);
         const primary = (r.type === "tx" || r.type === "address" || r.type === "block") ? (r.id || r.label) : (r.label || r.id);
-        const link = href
-          ? `<a class="id-full-text break-anywhere" href="${href}">${esc(primary)}</a>`
-          : `<span class="id-full-text break-anywhere">${esc(primary)}</span>`;
-        const extra = primary !== r.label && r.label ? `<div class="muted">${esc(r.label)}</div>` : "";
-        return `<div class="winner"><div><div class="id-line"><span class="badge">${esc(r.type)}</span>${link}${copyButton(r.id || r.label)}</div>${extra}</div></div>`;
+        const shown = (r.type === "tx" || r.type === "address")
+          ? idHtml(primary, { href, full: true })
+          : (href ? `<a class="break-anywhere" href="${href}">${esc(r.label || primary)}</a>` : `<span class="break-anywhere">${esc(r.label || primary)}</span>`);
+        const open = href ? `<a class="search-open" href="${href}">Open</a>` : "";
+        return `<div class="winner search-hit"><div><div><span class="badge">${searchWords(r)}</span></div>${shown}<p class="muted">${searchBlurb(r)}</p></div>${open}</div>`;
       }).join("") || `<div class="empty">Nothing matched that search.</div>`}
-    </div>`;
+    </div>
+    ${chainDetail(`<p class="muted">Search read this as ${esc(data.kind || "a query")}.</p>`, "How the search was read")}`;
 }
 
 const routes = [
@@ -1658,16 +1881,17 @@ function tradeSentence(t) {
 }
 
 function tradeMoved(t) {
-  const asset = formatAssetAmount(t.asset_atoms, t.asset);
+  const asset = `${formatAssetAmount(t.asset_atoms, "")} ${tradeAssetLink(t.asset)}`;
   const xfer = atomsToXfer(t.xfer_atoms);
+  if (t.side === "sell") return `They received ${xfer} and sent ${asset}.`;
+  if (t.tokens_pending) return `They paid ${xfer}. The ${asset} are not delivered yet.`;
+  return `They paid ${xfer} and received ${asset}.`;
+}
+
+function tradePriceDetail(t) {
   const price = atomsToXfer(t.price_atoms);
   const fee = atomsToXfer(t.fee_atoms);
-  const legs = t.side === "sell"
-    ? `Received ${xfer} · Sent ${asset}`
-    : t.tokens_pending
-      ? `Paid ${xfer} · Tokens on the way`
-      : `Paid ${xfer} · Received ${asset}`;
-  return `${legs} · ${price} per unit · Fee ${fee}`;
+  return `<details class="raw-json"><summary>Price and fee</summary><p class="muted">${price} per unit · Fee ${fee}</p></details>`;
 }
 
 function tradeStatus(t) {
@@ -1696,6 +1920,7 @@ function tradeCard(t, extra) {
       ${tradeStatus(t)}
     </div>
     <p class="trade-moved">${tradeMoved(t)}</p>
+    ${tradePriceDetail(t)}
     <div class="trade-links">
       ${when}
       <div class="trade-link stack"><span class="faint">Tx</span>${linkTx(t.txid, { full: true })}</div>
