@@ -51,6 +51,10 @@ def test_health_and_home(tmp_path: Path):
     assert "pinataViewUrl" not in cell
     assert "?v=explorer-public-1" in home.text
     assert 'href="https://xferchain.net"' in home.text
+    assert "What happened" in text
+    assert "Inputs, outputs, and chain detail" in text
+    assert "indexedReceipt" in text
+    assert "chainDetail" in text
     assert "formatAssetAmount" in text
     assert "pageAsset" in text
     assert "pageMembers" in text
