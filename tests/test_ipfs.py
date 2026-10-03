@@ -409,4 +409,12 @@ def test_asset_api_includes_ipfs_and_rejects_bad_cid(tmp_path: Path):
     assert body["ipfs_gateways"][0] == f"https://xfer.mypinata.cloud/ipfs/{cid}"
     bad = client.get("/api/ipfs/inspect", params={"cid": "nope"})
     assert bad.status_code == 400
+    db.conn.execute(
+        "INSERT INTO assets(name, kind, amount, units, reissuable, created_height) VALUES(?,?,?,?,?,?)",
+        ("ROOT/CHILD", "sub", 1, 0, 1, 3),
+    )
+    db.conn.commit()
+    child = client.get("/api/asset/ROOT/CHILD")
+    assert child.status_code == 200
+    assert child.json()["name"] == "ROOT/CHILD"
     db.close()

@@ -501,6 +501,58 @@ def test_feed_orders_filters_and_skips_non_trades(tmp_path: Path):
     assert "#/trades" in js
     assert ".badge.buy" in css
     assert ".badge.sell" in css
+    assert "sortTradesNewest" in js
+    assert "Buys and sells are listed together, newest first." in js
+    db.close()
+
+
+def test_feed_mixes_buys_and_sells_newest_transaction_first(tmp_path: Path):
+    """A newer sell sits above an older buy. Sides are not grouped."""
+    db = Database(tmp_path / "mix.db")
+    now = int(time.time())
+    start, _end, _day = et_day_window(now)
+    older_buy = tx(
+        [leg(BUYER, 10 * COIN), leg(PROCEEDS, 0, "MY_TOKEN", 2 * COIN)],
+        [leg(BUYER, 0, "MY_TOKEN", 2 * COIN), leg(PROCEEDS, 10 * COIN)],
+        height=10,
+        txid="a1" * 32,
+    )
+    mid_buy = tx(
+        [leg(BUYER, 3 * COIN), leg(PROCEEDS, 0, "MY_TOKEN", COIN)],
+        [leg(BUYER, 0, "MY_TOKEN", COIN), leg(PROCEEDS, 3 * COIN)],
+        height=11,
+        txid="c3" * 32,
+    )
+    newer_sell = tx(
+        [leg(SELLER, 0, "ROOT/CHILD", 4 * COIN), leg(PROCEEDS, 7 * COIN)],
+        [leg(PROCEEDS, 0, "ROOT/CHILD", 4 * COIN), leg(SELLER, 7 * COIN)],
+        height=12,
+        txid="b2" * 32,
+    )
+    same_block_sell = tx(
+        [leg(SELLER, 0, "ROOT/CHILD", COIN), leg(PROCEEDS, 2 * COIN)],
+        [leg(PROCEEDS, 0, "ROOT/CHILD", COIN), leg(SELLER, 2 * COIN)],
+        height=11,
+        txid="d4" * 32,
+    )
+    store_tx(db, older_buy, n=0, when=start + 1)
+    store_tx(db, mid_buy, n=1, when=start + 2)
+    store_tx(db, same_block_sell, n=4, when=start + 3)
+    store_tx(db, newer_sell, n=0, when=start + 4)
+    db.commit()
+    client, _app = _feed_client(db, FakeRPC({}))
+    body = client.get("/api/trades").json()
+    assert [item["txid"] for item in body["items"]] == [
+        newer_sell["txid"],
+        same_block_sell["txid"],
+        mid_buy["txid"],
+        older_buy["txid"],
+    ]
+    assert [item["side"] for item in body["items"]] == ["sell", "sell", "buy", "buy"]
+    buys = client.get("/api/trades?side=buy").json()
+    assert [item["txid"] for item in buys["items"]] == [mid_buy["txid"], older_buy["txid"]]
+    sells = client.get("/api/trades?side=sell").json()
+    assert [item["txid"] for item in sells["items"]] == [newer_sell["txid"], same_block_sell["txid"]]
     db.close()
 
 
