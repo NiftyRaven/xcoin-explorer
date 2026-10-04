@@ -368,4 +368,23 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
             return FileResponse(target)
         return FileResponse(WEB / "index.html")
 
+    # Handlers run on worker threads. Close the thread's database files
+    # before the thread goes idle, so a finished request does not keep them.
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        call = getattr(dependant, "call", None)
+        if call is None:
+            continue
+        route.dependant.call = _release_db_after(queries.db, call)
+
     return app
+
+
+def _release_db_after(db, func):
+    def call(**kwargs):
+        try:
+            return func(**kwargs)
+        finally:
+            db.discard_thread_connection()
+
+    return call

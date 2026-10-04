@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
+
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -304,4 +307,150 @@ def test_address_exception_returns_404_and_status_still_answers(tmp_path: Path, 
     tip = client.get("/api/tip")
     assert tip.status_code == 200
     assert tip.json()["hash"] == "abc"
+    db.close()
+
+
+def _db_fds(path: Path) -> int:
+    root = str(path.resolve())
+    count = 0
+    for entry in os.listdir("/proc/self/fd"):
+        try:
+            target = os.readlink(f"/proc/self/fd/{entry}")
+        except OSError:
+            continue
+        if target == root or target.startswith(root + "-"):
+            count += 1
+    return count
+
+
+def _join_all(threads: list[threading.Thread]) -> None:
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+    assert not any(thread.is_alive() for thread in threads)
+
+
+def test_finished_threads_do_not_leak_connections_or_files(tmp_path: Path):
+    """Finished threads must not keep a database connection or its files.
+
+    Leaving the connection open is one database file and one WAL file per
+    finished thread. A later wave of the same size must not add another set.
+    """
+    db = Database(tmp_path / "leak.db")
+    db.set_meta("best_hash", "abc")
+    db.commit()
+    before_conns = db.open_connection_count()
+    before_fds = _db_fds(db.path)
+    errors: list[BaseException | str] = []
+    wave = 40
+
+    def work():
+        try:
+            if db.get_meta("best_hash") != "abc":
+                errors.append("missing hash")
+        except Exception as exc:
+            errors.append(exc)
+
+    for _ in range(wave):
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert errors == []
+    assert db.open_connection_count() == before_conns
+    after_serial = _db_fds(db.path)
+    # Sequential threads overlap by one connection, not one per thread.
+    assert after_serial - before_fds < 8
+
+    for _ in range(2):
+        _join_all([threading.Thread(target=work) for _ in range(wave)])
+        assert errors == []
+        assert db.open_connection_count() == before_conns
+    after_bursts = _db_fds(db.path)
+    # Open files may sit at the number of connections that were in flight
+    # together. They must not sit at one database file and one WAL file for
+    # every thread that has already finished.
+    assert after_bursts <= before_fds + wave + 8
+    db.close()
+    assert db.open_connection_count() == 0
+    assert _db_fds(db.path) == 0
+
+
+def test_request_burst_does_not_keep_connections(tmp_path: Path):
+    db, _queries, app = _app(tmp_path)
+    db.set_meta("best_hash", "abc")
+    db.commit()
+    before_conns = db.open_connection_count()
+    before_fds = _db_fds(db.path)
+    client = TestClient(app)
+
+    def burst() -> None:
+        for _ in range(20):
+            tip = client.get("/api/tip")
+            assert tip.status_code == 200
+            assert tip.content
+            assert tip.json()["hash"] == "abc"
+            status = client.get("/api/status")
+            assert status.status_code == 200
+            assert status.content
+
+    burst()
+    assert db.open_connection_count() <= before_conns
+    after_first = _db_fds(db.path)
+    burst()
+    assert db.open_connection_count() <= before_conns
+    after_second = _db_fds(db.path)
+    assert after_second <= after_first + 2
+    assert after_second - before_fds < 20
+    db.close()
+    assert db.open_connection_count() == 0
+    assert _db_fds(db.path) == 0
+
+
+def test_unable_to_open_does_not_stick_and_pages_return_bodies(tmp_path: Path):
+    db, _queries, app = _app(tmp_path)
+    db.set_meta("best_hash", "abc")
+    db.commit()
+    real_open = db._open
+    calls = {"n": 0}
+
+    def flaky_open():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("unable to open database file")
+        return real_open()
+
+    db.discard_thread_connection()
+    db._open = flaky_open
+    assert db.get_meta("best_hash") == "abc"
+    assert calls["n"] == 2
+
+    def always_fail():
+        raise sqlite3.OperationalError("unable to open database file")
+
+    db._open = always_fail
+    db.discard_thread_connection()
+    with pytest.raises(sqlite3.OperationalError):
+        db.get_meta("best_hash")
+    db._open = real_open
+    assert db.get_meta("best_hash") == "abc"
+
+    calls["n"] = 0
+    db._open = flaky_open
+    client = TestClient(app)
+    status = client.get("/api/status")
+    assert status.status_code == 200
+    assert status.content
+    assert status.json()["best_hash"] == "abc"
+    tip = client.get("/api/tip")
+    assert tip.status_code == 200
+    assert tip.content
+    assert tip.json()["hash"] == "abc"
+    home = client.get("/")
+    assert home.status_code == 200
+    body = home.content
+    assert body
+    assert len(body) == int(home.headers["content-length"])
+    assert b"XFER Explorer" in body
     db.close()
