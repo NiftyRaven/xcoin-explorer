@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -165,7 +166,13 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
 
     @app.get("/api/address/{addr}")
     def address(addr: str, limit: int = 50):
-        return queries.address(addr, limit)
+        try:
+            return queries.address(addr, limit)
+        except (TypeError, IndexError, sqlite3.Error):
+            # A bad row used to escape the handler and leave the shared
+            # connection unusable for later /api/status and /api/tip calls.
+            queries.db.discard_thread_connection()
+            return JSONResponse({"error": "address not found"}, status_code=404)
 
     @app.get("/api/assets")
     def assets(q: str = "", kind: str = "", limit: int = 50, offset: int = 0):
