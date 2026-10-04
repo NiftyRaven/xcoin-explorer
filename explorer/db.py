@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import weakref
 from pathlib import Path
 
 SCHEMA = """
@@ -214,7 +215,14 @@ def _recoverable(exc: BaseException) -> bool:
     """Errors that mean this connection must not be used again."""
     if isinstance(exc, sqlite3.InterfaceError):
         return True
-    return isinstance(exc, sqlite3.ProgrammingError) and "closed" in str(exc).lower()
+    if isinstance(exc, sqlite3.ProgrammingError) and "closed" in str(exc).lower():
+        return True
+    # Raised by sqlite3.connect when the process cannot open another file.
+    # Retry once on a new connection instead of failing the request for good.
+    return (
+        isinstance(exc, sqlite3.OperationalError)
+        and "unable to open database file" in str(exc).lower()
+    )
 
 
 def _row_value(row, key: str, default=None):
@@ -281,6 +289,18 @@ class _Cursor:
         return iter(self.fetchall())
 
 
+class _Owner:
+    """Holds one thread's connection.
+
+    The owner is stored only in thread-local state. When that thread ends,
+    the owner is collected and its finalizer closes the database file.
+    """
+
+    def __init__(self, db: Database, conn: sqlite3.Connection):
+        self.conn = conn
+        self.finalizer = weakref.finalize(self, db._drop_conn, conn)
+
+
 class _Conn:
     """Thread-local connection handle. `db.conn.execute(...)` stays valid."""
 
@@ -337,6 +357,10 @@ class Database:
         self._thread_conn().executescript(SCHEMA)
         self._migrate()
 
+    def open_connection_count(self) -> int:
+        with self._guard:
+            return len(self._conns)
+
     @property
     def conn(self) -> _Conn:
         return self._handle
@@ -348,10 +372,17 @@ class Database:
         conn.row_factory = sqlite3.Row
         # Finish each pragma statement. An open statement on this connection
         # would make the next call fail with "bad parameter or other API misuse".
-        conn.execute("PRAGMA busy_timeout=5000").fetchone()
-        conn.execute("PRAGMA journal_mode=WAL").fetchone()
-        conn.execute("PRAGMA synchronous=NORMAL").fetchone()
-        conn.execute("PRAGMA foreign_keys=ON").fetchone()
+        for pragma in (
+            "PRAGMA busy_timeout=5000",
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA synchronous=NORMAL",
+            "PRAGMA foreign_keys=ON",
+        ):
+            cur = conn.execute(pragma)
+            try:
+                cur.fetchone()
+            finally:
+                cur.close()
         with self._guard:
             self._conns.append(conn)
         return conn
@@ -359,18 +390,27 @@ class Database:
     def _thread_conn(self) -> sqlite3.Connection:
         if self._closed:
             raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
-        conn = getattr(self._local, "conn", None)
-        if conn is None:
-            conn = self._open()
-            self._local.conn = conn
+        owner = getattr(self._local, "owner", None)
+        if owner is not None and owner.conn is not None:
+            return owner.conn
+        conn = self._open()
+        self._local.owner = _Owner(self, conn)
         return conn
 
     def discard_thread_connection(self) -> None:
         """Close this thread's connection so the next call opens a new one."""
-        conn = getattr(self._local, "conn", None)
-        self._local.conn = None
-        if conn is None:
+        owner = getattr(self._local, "owner", None)
+        self._local.owner = None
+        if owner is None or owner.conn is None:
             return
+        conn = owner.conn
+        owner.conn = None
+        # The finalizer would close it too. Detach so that runs once.
+        if not owner.finalizer.detach():
+            return
+        self._drop_conn(conn)
+
+    def _drop_conn(self, conn: sqlite3.Connection) -> None:
         with self._guard:
             try:
                 self._conns.remove(conn)
@@ -411,7 +451,11 @@ class Database:
 
     def close(self) -> None:
         self._closed = True
-        self._local.conn = None
+        owner = getattr(self._local, "owner", None)
+        self._local.owner = None
+        if owner is not None:
+            owner.conn = None
+            owner.finalizer.detach()
         with self._guard:
             conns = list(self._conns)
             self._conns.clear()
