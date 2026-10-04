@@ -21,7 +21,32 @@ from explorer.ipfs import attach_ipfs_fields
 
 
 def row_to_dict(row) -> dict[str, Any]:
-    return dict(row) if row is not None else {}
+    """Row to dict. A missing or unreadable row is empty, not an exception."""
+    if row is None:
+        return {}
+    try:
+        return dict(row)
+    except (IndexError, TypeError):
+        return {}
+
+
+def _cell(row, key: str, default=0):
+    if row is None:
+        return default
+    try:
+        value = row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+    return default if value is None else value
+
+
+def _mapped(rows) -> list[dict]:
+    out: list[dict] = []
+    for row in rows or []:
+        item = row_to_dict(row)
+        if item:
+            out.append(item)
+    return out
 
 
 def paginate(limit: int, default: int = 25, max_n: int = 100) -> int:
@@ -253,13 +278,15 @@ class Queries:
 
     def address(self, addr: str, limit: int = 50) -> dict:
         limit = paginate(limit, 50)
-        xfer = self.db.conn.execute(
-            "SELECT COALESCE(SUM(value),0) AS v FROM utxos WHERE address=? AND (asset IS NULL OR asset='')",
-            (addr,),
-        ).fetchone()["v"]
-        assets = [
-            row_to_dict(r)
-            for r in self.db.conn.execute(
+        xfer = _cell(
+            self.db.conn.execute(
+                "SELECT COALESCE(SUM(value),0) AS v FROM utxos WHERE address=? AND (asset IS NULL OR asset='')",
+                (addr,),
+            ).fetchone(),
+            "v",
+        )
+        assets = _mapped(
+            self.db.conn.execute(
                 """
                 SELECT asset AS name, COALESCE(SUM(asset_amount),0) AS amount
                 FROM utxos WHERE address=? AND asset IS NOT NULL AND asset!=''
@@ -267,10 +294,9 @@ class Queries:
                 """,
                 (addr,),
             ).fetchall()
-        ]
-        txs = [
-            row_to_dict(r)
-            for r in self.db.conn.execute(
+        )
+        txs = _mapped(
+            self.db.conn.execute(
                 """
                 SELECT t.*,
                   (
@@ -290,25 +316,31 @@ class Queries:
                 """,
                 (addr, addr, addr, limit),
             ).fetchall()
-        ]
-        wins = [
-            row_to_dict(r)
-            for r in self.db.conn.execute(
+        )
+        wins = _mapped(
+            self.db.conn.execute(
                 "SELECT * FROM lottery_wins WHERE address=? ORDER BY height DESC LIMIT 50",
                 (addr,),
             ).fetchall()
-        ]
+        )
         ident = self.db.conn.execute(
             "SELECT * FROM identities WHERE address=?", (addr,)
         ).fetchone()
-        received = self.db.conn.execute(
-            "SELECT COALESCE(SUM(value),0) AS v FROM txio WHERE address=? AND direction='out'",
-            (addr,),
-        ).fetchone()["v"]
-        sent = self.db.conn.execute(
-            "SELECT COALESCE(SUM(value),0) AS v FROM txio WHERE address=? AND direction='in'",
-            (addr,),
-        ).fetchone()["v"]
+        received = _cell(
+            self.db.conn.execute(
+                "SELECT COALESCE(SUM(value),0) AS v FROM txio WHERE address=? AND direction='out'",
+                (addr,),
+            ).fetchone(),
+            "v",
+        )
+        sent = _cell(
+            self.db.conn.execute(
+                "SELECT COALESCE(SUM(value),0) AS v FROM txio WHERE address=? AND direction='in'",
+                (addr,),
+            ).fetchone(),
+            "v",
+        )
+        identity = row_to_dict(ident) if ident is not None else None
         return {
             "address": addr,
             "balance_atoms": int(xfer or 0),
@@ -318,9 +350,8 @@ class Queries:
             "assets": assets,
             "txs": txs,
             "lottery_wins": wins,
-            "guest_shares": [
-                row_to_dict(r)
-                for r in self.db.conn.execute(
+            "guest_shares": _mapped(
+                self.db.conn.execute(
                     """
                     SELECT s.txid, s.height, s.host_handle, s.guest_percent, g.amount
                     FROM lottery_share_guests g
@@ -330,8 +361,8 @@ class Queries:
                     """,
                     (addr,),
                 ).fetchall()
-            ],
-            "identity": row_to_dict(ident) if ident else None,
+            ),
+            "identity": identity or None,
         }
 
     def assets(self, q: str = "", kind: str = "", limit: int = 50, offset: int = 0) -> dict:

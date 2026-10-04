@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 SCHEMA = """
@@ -197,14 +198,188 @@ CREATE TABLE IF NOT EXISTS launch_fee_addresses (
 """
 
 
+# Reads are safe to run again on a fresh connection. Writes are not.
+_READ_PREFIXES = ("SELECT", "PRAGMA", "WITH", "EXPLAIN")
+
+
+def _is_read(sql: str) -> bool:
+    text = sql.lstrip()
+    if not text:
+        return False
+    head = text.split(None, 1)[0].upper()
+    return head in _READ_PREFIXES
+
+
+def _recoverable(exc: BaseException) -> bool:
+    """Errors that mean this connection must not be used again."""
+    if isinstance(exc, sqlite3.InterfaceError):
+        return True
+    return isinstance(exc, sqlite3.ProgrammingError) and "closed" in str(exc).lower()
+
+
+def _row_value(row, key: str, default=None):
+    if row is None:
+        return default
+    try:
+        value = row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+    return default if value is None else value
+
+
+class _Cursor:
+    """Cursor that drops a broken connection instead of reusing it."""
+
+    def __init__(self, db: Database, sql: str, parameters):
+        self._db = db
+        self._sql = sql
+        self._parameters = parameters
+        self._retried = False
+        self._cur = self._start()
+
+    def _start(self):
+        try:
+            return self._db._thread_conn().execute(self._sql, self._parameters)
+        except sqlite3.Error as exc:
+            if not _recoverable(exc):
+                raise
+            return self._replace(exc)
+
+    def _replace(self, exc: sqlite3.Error):
+        self._db.discard_thread_connection()
+        if self._retried or not _is_read(self._sql):
+            raise exc
+        self._retried = True
+        try:
+            return self._db._thread_conn().execute(self._sql, self._parameters)
+        except sqlite3.Error as retry_exc:
+            if _recoverable(retry_exc):
+                self._db.discard_thread_connection()
+            raise
+
+    def _fetch(self, name: str):
+        try:
+            return getattr(self._cur, name)()
+        except sqlite3.Error as exc:
+            if not _recoverable(exc):
+                raise
+            self._cur = self._replace(exc)
+            try:
+                return getattr(self._cur, name)()
+            except sqlite3.Error as retry_exc:
+                if _recoverable(retry_exc):
+                    self._db.discard_thread_connection()
+                raise
+
+    def fetchone(self):
+        return self._fetch("fetchone")
+
+    def fetchall(self):
+        return self._fetch("fetchall")
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class _Conn:
+    """Thread-local connection handle. `db.conn.execute(...)` stays valid."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    def execute(self, sql, parameters=()):
+        return _Cursor(self._db, sql, parameters)
+
+    def executemany(self, sql, seq):
+        try:
+            return self._db._thread_conn().executemany(sql, seq)
+        except sqlite3.Error as exc:
+            if _recoverable(exc):
+                self._db.discard_thread_connection()
+            raise
+
+    def executescript(self, script: str):
+        try:
+            return self._db._thread_conn().executescript(script)
+        except sqlite3.Error as exc:
+            if _recoverable(exc):
+                self._db.discard_thread_connection()
+            raise
+
+    def commit(self):
+        self._db._thread_conn().commit()
+
+    def rollback(self):
+        try:
+            self._db._thread_conn().rollback()
+        except sqlite3.Error as exc:
+            if _recoverable(exc):
+                self._db.discard_thread_connection()
+                return
+            raise
+
+    def close(self):
+        self._db.discard_thread_connection()
+
+    def __getattr__(self, name: str):
+        return getattr(self._db._thread_conn(), name)
+
+
 class Database:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self.conn = sqlite3.connect(str(path), check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(SCHEMA)
+        self._local = threading.local()
+        self._guard = threading.Lock()
+        self._conns: list[sqlite3.Connection] = []
+        self._closed = False
+        self._handle = _Conn(self)
+        self._thread_conn().executescript(SCHEMA)
         self._migrate()
+
+    @property
+    def conn(self) -> _Conn:
+        return self._handle
+
+    def _open(self) -> sqlite3.Connection:
+        # check_same_thread is off so process shutdown can close every
+        # connection. Each connection is still used by only one thread.
+        conn = sqlite3.connect(str(self.path), timeout=5.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        # Finish each pragma statement. An open statement on this connection
+        # would make the next call fail with "bad parameter or other API misuse".
+        conn.execute("PRAGMA busy_timeout=5000").fetchone()
+        conn.execute("PRAGMA journal_mode=WAL").fetchone()
+        conn.execute("PRAGMA synchronous=NORMAL").fetchone()
+        conn.execute("PRAGMA foreign_keys=ON").fetchone()
+        with self._guard:
+            self._conns.append(conn)
+        return conn
+
+    def _thread_conn(self) -> sqlite3.Connection:
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._open()
+            self._local.conn = conn
+        return conn
+
+    def discard_thread_connection(self) -> None:
+        """Close this thread's connection so the next call opens a new one."""
+        conn = getattr(self._local, "conn", None)
+        self._local.conn = None
+        if conn is None:
+            return
+        with self._guard:
+            try:
+                self._conns.remove(conn)
+            except ValueError:
+                pass
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
 
     def _migrate(self) -> None:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(lottery_active)")}
@@ -235,11 +410,20 @@ class Database:
         self.conn.commit()
 
     def close(self) -> None:
-        self.conn.close()
+        self._closed = True
+        self._local.conn = None
+        with self._guard:
+            conns = list(self._conns)
+            self._conns.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
 
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-        return row["value"] if row else default
+        return _row_value(row, "value", default)
 
     def set_meta(self, key: str, value: str) -> None:
         self.conn.execute(
@@ -249,7 +433,8 @@ class Database:
 
     def indexed_height(self) -> int:
         row = self.conn.execute("SELECT MAX(height) AS h FROM blocks").fetchone()
-        return int(row["h"] if row and row["h"] is not None else -1)
+        value = _row_value(row, "h", None)
+        return int(value) if value is not None else -1
 
     def commit(self) -> None:
         self.conn.commit()
