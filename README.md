@@ -85,6 +85,45 @@ the wallet start actually reads **and** in a local `explorer.toml`
 
 ---
 
+## Public API: coin supply
+
+Read-only endpoints for listing sites (CoinGecko, CoinMarketCap, and similar).
+The live explorer serves them at `https://explorer.xferchain.net`.
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/supply/circulating` | Circulating XFER, plain text |
+| `GET /api/supply/total` | Total XFER in existence, plain text |
+| `GET /api/supply/max` | Maximum XFER that will ever exist, plain text |
+| `GET /api/supply` | JSON: all three, the height, atom amounts, and each burn address |
+
+The plain-text endpoints return one decimal number in XFER and nothing else:
+no units, no thousands separators, no trailing zeros (for example `177465000`
+or `177465000.12345678`). They send `Content-Type: text/plain`,
+`Access-Control-Allow-Origin: *`, and `Cache-Control: public, max-age=60`.
+The explorer recomputes the numbers at most once a minute. All math is in whole
+atoms (1 XFER = 100,000,000 xferons), so there is no float rounding.
+
+Definitions:
+
+- **Issued**: block subsidy paid from height 1 through the indexed tip
+  (5,000 XFER per block in the first era; genesis pays nothing). This is
+  `supply_atoms` in `/api/status`.
+- **Total** = issued minus XFER held at the chain's burn addresses. The
+  addresses come from `chainparams.cpp` (asset issue, reissue, sub, unique,
+  message channel, qualifier, sub qualifier, restricted, null tag, and global
+  burn). Nobody has a key for them, so those coins can never move.
+- **Circulating** = total. X Coin has no premine, team, vesting, or locked
+  coins, and the explorer treats nothing else as unspendable.
+- **Max** = every coin the halving schedule will ever pay
+  (`lifetime_atoms` in `/api/stats`, about 21 billion XFER).
+
+XFER sent to an OP_RETURN output is destroyed too, but the indexer stores those
+outputs with zero value, so it cannot subtract them. Ordinary OP_RETURN memos
+carry no XFER.
+
+---
+
 ## Requirements
 
 - Python 3.11+

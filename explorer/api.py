@@ -21,9 +21,17 @@ from explorer.chain import (
 )
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.queries import Queries, norm_handle
+from explorer.supply import CACHE_SECONDS, SupplyCache
 from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, TradeFeed
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+
+# Public, read-only supply numbers. Listing sites fetch these from anywhere.
+SUPPLY_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": f"public, max-age={CACHE_SECONDS}",
+    "X-Content-Type-Options": "nosniff",
+}
 
 
 def _as_node_list(value) -> list[dict]:
@@ -84,6 +92,8 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         indexer,
         DEFAULT_LAUNCH_PROCEEDS if launch_proceeds is None else launch_proceeds,
     )
+
+    app.state.supply = SupplyCache(queries.db)
 
     if WEB.exists():
         app.mount("/static", StaticFiles(directory=str(WEB)), name="static")
@@ -315,6 +325,30 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
     def trades(side: str = "all", q: str = ""):
         """Launch buys and sells since 12:00 AM America/New_York. Not stored as history."""
         return app.state.trades.page(side=side, q=q)
+
+    @app.api_route("/api/supply", methods=["GET", "HEAD"])
+    def supply():
+        """Circulating, total, and max supply in XFER, plus the height they are for."""
+        return JSONResponse(app.state.supply.get(), headers=SUPPLY_HEADERS)
+
+    def _supply_text(key: str) -> Response:
+        return Response(
+            content=app.state.supply.get()[key],
+            media_type="text/plain",
+            headers=SUPPLY_HEADERS,
+        )
+
+    @app.api_route("/api/supply/circulating", methods=["GET", "HEAD"])
+    def supply_circulating():
+        return _supply_text("circulating")
+
+    @app.api_route("/api/supply/total", methods=["GET", "HEAD"])
+    def supply_total():
+        return _supply_text("total")
+
+    @app.api_route("/api/supply/max", methods=["GET", "HEAD"])
+    def supply_max():
+        return _supply_text("max")
 
     @app.get("/api/mempool")
     def mempool():
