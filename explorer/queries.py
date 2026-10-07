@@ -295,26 +295,26 @@ class Queries:
                 (addr,),
             ).fetchall()
         )
+        # Start from this address's txio rows (idx_txio_addr), then look up each
+        # tx by primary key. The old form scanned every tx and probed txio for
+        # each one, which took tens of seconds for busy addresses.
         txs = _mapped(
             self.db.conn.execute(
                 """
-                SELECT t.*,
-                  (
-                    SELECT COALESCE(SUM(value), 0) FROM txio
-                    WHERE txid = t.txid AND address = ? AND direction = 'out'
-                  ) AS addr_received,
-                  (
-                    SELECT COALESCE(SUM(value), 0) FROM txio
-                    WHERE txid = t.txid AND address = ? AND direction = 'in'
-                  ) AS addr_sent
-                FROM txs t
-                WHERE EXISTS (
-                  SELECT 1 FROM txio io WHERE io.txid = t.txid AND io.address = ?
+                WITH io AS (
+                  SELECT txid,
+                    COALESCE(SUM(CASE WHEN direction = 'out' THEN value ELSE 0 END), 0) AS addr_received,
+                    COALESCE(SUM(CASE WHEN direction = 'in' THEN value ELSE 0 END), 0) AS addr_sent
+                  FROM txio
+                  WHERE address = ?
+                  GROUP BY txid
                 )
+                SELECT t.*, io.addr_received AS addr_received, io.addr_sent AS addr_sent
+                FROM io CROSS JOIN txs t ON t.txid = io.txid
                 ORDER BY t.height IS NULL DESC, t.height DESC, t.n DESC
                 LIMIT ?
                 """,
-                (addr, addr, addr, limit),
+                (addr, limit),
             ).fetchall()
         )
         wins = _mapped(

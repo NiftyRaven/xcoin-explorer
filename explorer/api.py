@@ -21,6 +21,7 @@ from explorer.chain import (
 )
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.queries import Queries, norm_handle
+from explorer.statcache import StaleWhileRefreshCache
 from explorer.supply import CACHE_SECONDS, SupplyCache
 from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, TradeFeed
 
@@ -94,6 +95,7 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
     )
 
     app.state.supply = SupplyCache(queries.db)
+    app.state.stats_cache = StaleWhileRefreshCache()
 
     if WEB.exists():
         app.mount("/static", StaticFiles(directory=str(WEB)), name="static")
@@ -307,7 +309,9 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
 
     @app.get("/api/stats")
     def stats(pulse: int = 180):
-        return queries.chain_stats(pulse)
+        # The aggregates scan every hat row and change at most once a block.
+        pulse = _stats_pulse(pulse)
+        return app.state.stats_cache.get(("stats", pulse), lambda: queries.chain_stats(pulse))
 
     @app.get("/api/lottery/winners")
     def lottery_winners(limit: int = 40, before: int | None = None):
@@ -412,6 +416,13 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         route.dependant.call = _release_db_after(queries.db, call)
 
     return app
+
+
+def _stats_pulse(pulse) -> int:
+    try:
+        return max(24, min(int(pulse or 180), 720))
+    except (TypeError, ValueError):
+        return 180
 
 
 def _release_db_after(db, func):
