@@ -21,7 +21,7 @@ from explorer.chain import (
 )
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.links import MAX_BATCH, AddressLinks, addresses_in
-from explorer.queries import Queries, norm_handle
+from explorer.queries import Queries, norm_handle, page_offset, paginate
 from explorer.statcache import StaleWhileRefreshCache
 from explorer.supply import CACHE_SECONDS, SupplyCache
 from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, TradeFeed
@@ -164,8 +164,9 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         return queries.search(q)
 
     @app.get("/api/blocks")
-    def blocks(limit: int = 25, before: int | None = None):
-        return {"items": queries.recent_blocks(limit, before)}
+    def blocks(limit: int = 25, before: int | None = None, offset: int = 0):
+        items = queries.recent_blocks(limit, before, offset)
+        return {"items": items, "total": queries.block_count(), "limit": paginate(limit), "offset": page_offset(offset)}
 
     @app.get("/api/block/{key}")
     def block(key: str):
@@ -186,9 +187,9 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         return labeled(t)
 
     @app.get("/api/address/{addr}")
-    def address(addr: str, limit: int = 50):
+    def address(addr: str, limit: int = 50, offset: int = 0):
         try:
-            return labeled(queries.address(addr, limit), (addr,))
+            return labeled(queries.address(addr, limit, offset), (addr,))
         except (TypeError, IndexError, sqlite3.Error):
             # A bad row used to escape the handler and leave the shared
             # connection unusable for later /api/status and /api/tip calls.
@@ -208,6 +209,20 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
                     if item.get("ipfs_cid"):
                         queries.store_ipfs(item["name"], item["ipfs_cid"])
         return data
+
+    @app.get("/api/asset-holders/{name:path}")
+    def asset_holders(name: str, limit: int = 25, offset: int = 0):
+        full = queries.asset_name(name)
+        if not full:
+            return JSONResponse({"error": "asset not found"}, status_code=404)
+        return labeled(queries.asset_holders(full, limit, offset))
+
+    @app.get("/api/asset-activity/{name:path}")
+    def asset_activity(name: str, limit: int = 25, offset: int = 0):
+        full = queries.asset_name(name)
+        if not full:
+            return JSONResponse({"error": "asset not found"}, status_code=404)
+        return labeled(queries.asset_activity(full, limit, offset))
 
     @app.get("/api/asset/{name:path}")
     def asset(name: str, limit: int = 50):
@@ -332,8 +347,8 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         return {"items": queries.lottery_leaders(limit)}
 
     @app.get("/api/rich")
-    def rich(limit: int = 50):
-        return labeled({"items": queries.rich_list(limit)})
+    def rich(limit: int = 50, offset: int = 0):
+        return labeled(queries.rich_list(limit, offset))
 
     @app.get("/api/identities")
     def identities(addrs: str = ""):

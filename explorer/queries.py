@@ -57,6 +57,13 @@ def paginate(limit: int, default: int = 25, max_n: int = 100) -> int:
     return max(1, min(limit, max_n))
 
 
+def page_offset(offset) -> int:
+    try:
+        return max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def norm_handle(value: str | None) -> str:
     return (value or "").strip().lower().lstrip("@")
 
@@ -106,7 +113,7 @@ class Queries:
             out.update(extra)
         return out
 
-    def recent_blocks(self, limit: int = 20, before: int | None = None) -> list[dict]:
+    def recent_blocks(self, limit: int = 20, before: int | None = None, offset: int = 0) -> list[dict]:
         limit = paginate(limit)
         sql = """
             SELECT b.*, w.xaccount AS winner_handle
@@ -115,7 +122,7 @@ class Queries:
         """
         if before is None:
             rows = self.db.conn.execute(
-                sql + " ORDER BY b.height DESC LIMIT ?", (limit,)
+                sql + " ORDER BY b.height DESC LIMIT ? OFFSET ?", (limit, page_offset(offset))
             ).fetchall()
         else:
             rows = self.db.conn.execute(
@@ -123,6 +130,9 @@ class Queries:
                 (before, limit),
             ).fetchall()
         return [row_to_dict(r) for r in rows]
+
+    def block_count(self) -> int:
+        return int(_cell(self.db.conn.execute("SELECT COUNT(*) AS c FROM blocks").fetchone(), "c"))
 
     def block(self, key: str) -> dict | None:
         if key.isdigit():
@@ -276,8 +286,9 @@ class Queries:
             ]
         return rows
 
-    def address(self, addr: str, limit: int = 50) -> dict:
+    def address(self, addr: str, limit: int = 50, offset: int = 0) -> dict:
         limit = paginate(limit, 50)
+        offset = page_offset(offset)
         xfer = _cell(
             self.db.conn.execute(
                 "SELECT COALESCE(SUM(value),0) AS v FROM utxos WHERE address=? AND (asset IS NULL OR asset='')",
@@ -309,14 +320,33 @@ class Queries:
                   WHERE address = ?
                   GROUP BY txid
                 )
-                SELECT t.*, io.addr_received AS addr_received, io.addr_sent AS addr_sent
+                SELECT t.*, io.addr_received AS addr_received, io.addr_sent AS addr_sent,
+                  COUNT(*) OVER () AS tx_total
                 FROM io CROSS JOIN txs t ON t.txid = io.txid
                 ORDER BY t.height IS NULL DESC, t.height DESC, t.n DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (addr, limit),
+                (addr, limit, offset),
             ).fetchall()
         )
+        if txs:
+            tx_total = txs[0]["tx_total"]
+        elif offset:
+            # Past the last page: the window count has no row to ride on.
+            tx_total = _cell(
+                self.db.conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM (SELECT DISTINCT txid FROM txio WHERE address = ?) io
+                    JOIN txs t ON t.txid = io.txid
+                    """,
+                    (addr,),
+                ).fetchone(),
+                "c",
+            )
+        else:
+            tx_total = 0
+        for t in txs:
+            t.pop("tx_total", None)
         wins = _mapped(
             self.db.conn.execute(
                 "SELECT * FROM lottery_wins WHERE address=? ORDER BY height DESC LIMIT 50",
@@ -349,6 +379,9 @@ class Queries:
             "burn": BURN_ADDRESSES_MAIN.get(addr),
             "assets": assets,
             "txs": txs,
+            "tx_total": int(tx_total),
+            "tx_offset": offset,
+            "tx_limit": limit,
             "lottery_wins": wins,
             "guest_shares": _mapped(
                 self.db.conn.execute(
@@ -367,7 +400,7 @@ class Queries:
 
     def assets(self, q: str = "", kind: str = "", limit: int = 50, offset: int = 0) -> dict:
         limit = paginate(limit, 50)
-        offset = max(0, int(offset or 0))
+        offset = page_offset(offset)
         args: list[Any] = []
         clauses = ["(kind IS NULL OR kind != 'owner')"]
         if q:
@@ -384,45 +417,89 @@ class Queries:
             f"SELECT * FROM assets WHERE {where_sql} ORDER BY created_height DESC, name LIMIT ? OFFSET ?",
             [*args, limit, offset],
         ).fetchall()
-        return {"total": total, "items": [attach_ipfs_fields(row_to_dict(r)) for r in rows]}
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "items": [attach_ipfs_fields(row_to_dict(r)) for r in rows],
+        }
 
-    def asset(self, name: str, limit: int = 50) -> dict | None:
+    def _asset_row(self, name: str):
         row = self.db.conn.execute("SELECT * FROM assets WHERE name=?", (name,)).fetchone()
         if not row:
             row = self.db.conn.execute("SELECT * FROM assets WHERE name=?", (name.upper(),)).fetchone()
+        return row
+
+    def asset_holders(self, name: str, limit: int = 100, offset: int = 0) -> dict:
+        """Holders of an asset, largest first, with the full holder count."""
+        limit = paginate(limit, 100)
+        offset = page_offset(offset)
+        rows = _mapped(
+            self.db.conn.execute(
+                """
+                SELECT address, COALESCE(SUM(asset_amount),0) AS amount, COUNT(*) OVER () AS total
+                FROM utxos WHERE asset=?
+                GROUP BY address HAVING amount > 0
+                ORDER BY amount DESC, address LIMIT ? OFFSET ?
+                """,
+                (name, limit, offset),
+            ).fetchall()
+        )
+        if rows:
+            total = rows[0]["total"]
+        else:
+            total = self.asset_holder_count(name) if offset else 0
+        for r in rows:
+            r.pop("total", None)
+        return {"total": int(total), "limit": limit, "offset": offset, "items": rows}
+
+    def asset_holder_count(self, name: str) -> int:
+        return int(
+            _cell(
+                self.db.conn.execute(
+                    "SELECT COUNT(DISTINCT address) AS c FROM utxos WHERE asset=? AND asset_amount>0",
+                    (name,),
+                ).fetchone(),
+                "c",
+            )
+        )
+
+    def asset_activity(self, name: str, limit: int = 50, offset: int = 0) -> dict:
+        """Asset history, newest first, with the full row count."""
+        limit = paginate(limit, 50)
+        offset = page_offset(offset)
+        total = _cell(
+            self.db.conn.execute("SELECT COUNT(*) AS c FROM asset_activity WHERE name=?", (name,)).fetchone(),
+            "c",
+        )
+        rows = _mapped(
+            self.db.conn.execute(
+                "SELECT * FROM asset_activity WHERE name=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                (name, limit, offset),
+            ).fetchall()
+        )
+        return {"total": int(total), "limit": limit, "offset": offset, "items": rows}
+
+    def asset(self, name: str, limit: int = 50) -> dict | None:
+        row = self._asset_row(name)
         if not row:
             return None
         asset = row_to_dict(row)
-        holders = [
-            row_to_dict(r)
-            for r in self.db.conn.execute(
-                """
-                SELECT address, COALESCE(SUM(asset_amount),0) AS amount
-                FROM utxos WHERE asset=?
-                GROUP BY address HAVING amount > 0
-                ORDER BY amount DESC LIMIT 100
-                """,
-                (asset["name"],),
-            ).fetchall()
-        ]
-        activity = [
-            row_to_dict(r)
-            for r in self.db.conn.execute(
-                "SELECT * FROM asset_activity WHERE name=? ORDER BY id DESC LIMIT ?",
-                (asset["name"], paginate(limit, 50)),
-            ).fetchall()
-        ]
+        holders = self.asset_holders(asset["name"], 100)
+        activity = self.asset_activity(asset["name"], limit)
         ident = self.db.conn.execute(
             "SELECT * FROM identities WHERE asset=?", (asset["name"],)
         ).fetchone()
-        asset["holders"] = holders
-        asset["activity"] = activity
+        asset["holders"] = holders["items"]
+        asset["activity"] = activity["items"]
+        asset["activity_total"] = activity["total"]
         asset["identity"] = row_to_dict(ident) if ident else None
-        asset["holder_count"] = self.db.conn.execute(
-            "SELECT COUNT(DISTINCT address) AS c FROM utxos WHERE asset=? AND asset_amount>0",
-            (asset["name"],),
-        ).fetchone()["c"]
+        asset["holder_count"] = self.asset_holder_count(asset["name"])
         return attach_ipfs_fields(asset)
+
+    def asset_name(self, name: str) -> str | None:
+        row = self._asset_row(name)
+        return row["name"] if row else None
 
     def store_ipfs(self, name: str, cid: str) -> None:
         if not name or not cid:
@@ -499,10 +576,7 @@ class Queries:
     ) -> dict:
         """Directory of lottery handles: eligible now, or every handle seen in XVA1."""
         limit = paginate(limit, 200, max_n=1000)
-        try:
-            offset = max(0, int(offset or 0))
-        except (TypeError, ValueError):
-            offset = 0
+        offset = page_offset(offset)
         needle = norm_handle(q)
         scope = "all" if str(scope or "").lower() == "all" else "eligible"
 
@@ -623,6 +697,8 @@ class Queries:
             "total": len(items),
             "eligible_total": eligible_total,
             "known_total": len(known),
+            "limit": limit,
+            "offset": offset,
             "items": items[offset : offset + limit],
         }
 
@@ -940,21 +1016,31 @@ class Queries:
             out.append(row_to_dict(r))
         return out[: paginate(limit, 200, 500)]
 
-    def rich_list(self, limit: int = 50) -> list[dict]:
+    def rich_list(self, limit: int = 50, offset: int = 0) -> dict:
         limit = paginate(limit, 50)
-        rows = self.db.conn.execute(
-            """
+        offset = page_offset(offset)
+        balances = """
             SELECT address, COALESCE(SUM(value),0) AS balance
             FROM utxos
             WHERE address IS NOT NULL AND address != '' AND (asset IS NULL OR asset='')
             GROUP BY address
             HAVING balance > 0
-            ORDER BY balance DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        return [row_to_dict(r) for r in rows]
+        """
+        rows = _mapped(
+            self.db.conn.execute(
+                f"SELECT *, COUNT(*) OVER () AS total FROM ({balances}) ORDER BY balance DESC, address LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        )
+        if rows:
+            total = rows[0]["total"]
+        elif offset:
+            total = _cell(self.db.conn.execute(f"SELECT COUNT(*) AS c FROM ({balances})").fetchone(), "c")
+        else:
+            total = 0
+        for r in rows:
+            r.pop("total", None)
+        return {"total": int(total), "limit": limit, "offset": offset, "items": rows}
 
     def search(self, q: str) -> dict:
         raw = (q or "").strip()
