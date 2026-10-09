@@ -796,7 +796,9 @@ async function pageHome() {
 }
 
 async function pageBlocks() {
-  const data = await api("/blocks?limit=40");
+  const state = pageState(hashQuery());
+  const data = await api(`/blocks?limit=${state.size}&offset=${state.offset}`);
+  if (clampPage(data.total || 0, state)) return;
   app.innerHTML = `
     <h1 class="page-title">Blocks</h1>
     <p class="sub">One block per minute. Height 0 is genesis and pays nothing. Height 1 is the first draw.</p>
@@ -814,7 +816,9 @@ async function pageBlocks() {
           </tr>`).join("") || `<tr><td colspan="6" class="empty">No blocks yet.</td></tr>`}
         </tbody>
       </table>
+      ${pagerHtml("blocks-pager", data.total || 0, state)}
     </div>`;
+  bindPagers();
 }
 
 function receiptCard(lines, where) {
@@ -1099,14 +1103,16 @@ function addressReceipt(a) {
   lines.push(`Altogether it has received ${atomsToXfer(a.received_atoms)} and sent ${atomsToXfer(a.sent_atoms)}.`);
   const wins = (a.lottery_wins || []).length;
   if (wins) lines.push(`The draw paid this address ${wins} time${wins === 1 ? "" : "s"}. Open a block in the list to see that minute.`);
-  const n = (a.txs || []).length;
-  if (n) lines.push(`${n} payment${n === 1 ? "" : "s"} below. Open one to see who sent what.`);
+  const n = a.tx_total ?? (a.txs || []).length;
+  if (n) lines.push(`${n.toLocaleString()} payment${n === 1 ? "" : "s"} below. Open one to see who sent what.`);
   else lines.push("No payments for this address are indexed yet.");
   return receiptCard(lines, "A positive amount means this address received more XFER than it sent in that payment.");
 }
 
 async function pageAddress(addr) {
-  const a = await api("/address/" + encodeURIComponent(addr));
+  const state = pageState(hashQuery());
+  const a = await api(`/address/${encodeURIComponent(addr)}?limit=${state.size}&offset=${state.offset}`);
+  if (clampPage(a.tx_total || 0, state)) return;
   app.innerHTML = `
     <h1 class="page-title">Address</h1>
     <p class="id-hero">${handleChips(a.address)}${copyable(a.address)}</p>
@@ -1119,6 +1125,7 @@ async function pageAddress(addr) {
           <thead><tr><th>Transaction</th><th>Block</th><th>When</th><th>For this address</th></tr></thead>
           <tbody>${(a.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${t.height != null ? linkBlock(t.height) : "—"}</td><td class="muted">${timeAgo(t.time)}</td><td>${addressTxNet(t)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No transactions for this address.</td></tr>`}</tbody>
         </table>
+        ${pagerHtml("address-pager", a.tx_total || 0, state)}
       </div>
       <div>
         <div class="card" style="margin-bottom:16px">
@@ -1136,14 +1143,33 @@ async function pageAddress(addr) {
         </div>` : ""}
       </div>
     </div>`;
+  bindPagers();
 }
 
+const ASSET_KINDS = [["", "All"], ["root", "Roots"], ["sub", "Subs"], ["unique", "Uniques"]];
+
 async function pageAssets() {
-  const data = await api("/assets?limit=80");
+  const params = hashQuery();
+  const q = (params.get("q") || "").trim();
+  const kind = ASSET_KINDS.some(([k]) => k && k === params.get("kind")) ? params.get("kind") : "";
+  const state = pageState(params);
+  const data = await api(`/assets?q=${encodeURIComponent(q)}&kind=${kind}&limit=${state.size}&offset=${state.offset}`);
+  if (clampPage(data.total || 0, state)) return;
+  const filterHash = (nextKind, nextQ) => withParams("#/assets", { q: nextQ, kind: nextKind, size: state.size });
   app.innerHTML = `
     <h1 class="page-title">Assets</h1>
     <p class="sub">Roots come from Sign in with X. Subs are NAME/CHILD. Uniques are NAME#tag.</p>
     <div class="card">
+      <div class="toolbar">
+        <form class="search" id="asset-search">
+          <input id="asset-q" type="search" value="${esc(q)}" placeholder="Search name or @handle" autocomplete="off" />
+          <button type="submit">Search</button>
+        </form>
+        <div class="tabs" id="asset-kinds">
+          ${ASSET_KINDS.map(([k, label]) => `<a class="tab ${k === kind ? "on" : ""}" href="${esc(filterHash(k, q))}">${label}</a>`).join("")}
+        </div>
+      </div>
+      <p class="member-meta">${(data.total || 0).toLocaleString()} ${data.total === 1 ? "asset" : "assets"}${q ? ` for “${esc(q)}”` : ""}</p>
       <table class="click-rows">
         <thead><tr><th>Name</th><th>Kind</th><th>Amount</th><th>IPFS</th><th>X</th><th>Created</th></tr></thead>
         <tbody>
@@ -1154,10 +1180,16 @@ async function pageAssets() {
             <td>${assetListIpfsCell(a)}</td>
             <td>${a.x_handle ? handle(a.x_handle) : "—"}</td>
             <td>${a.created_height != null ? linkBlock(a.created_height) : "—"}</td>
-          </tr>`).join("") || `<tr><td colspan="6" class="empty">No assets yet.</td></tr>`}
+          </tr>`).join("") || `<tr><td colspan="6" class="empty">${q || kind ? "No asset matches that search." : "No assets yet."}</td></tr>`}
         </tbody>
       </table>
+      ${pagerHtml("assets-pager", data.total || 0, state)}
     </div>`;
+  $("#asset-search").addEventListener("submit", (e) => {
+    e.preventDefault();
+    location.hash = filterHash(kind, $("#asset-q").value.trim());
+  });
+  bindPagers();
 }
 
 const GATEWAY_CHIPS = [
@@ -1377,7 +1409,16 @@ function activityWords(kind) {
 }
 
 async function pageAsset(name) {
-  const a = await api(assetApiPath(name));
+  const params = hashQuery();
+  const hState = pageState(params, "holders");
+  const aState = pageState(params, "history");
+  const enc = encodeURIComponent(name);
+  const [a, holderPage, activityPage] = await Promise.all([
+    api(assetApiPath(name)),
+    api(`/asset-holders/${enc}?limit=${hState.size}&offset=${hState.offset}`),
+    api(`/asset-activity/${enc}?limit=${aState.size}&offset=${aState.offset}`),
+  ]);
+  if (clampPage(holderPage.total || 0, hState, "holders") || clampPage(activityPage.total || 0, aState, "history")) return;
   const meta = a.rpc || {};
   const units = meta.units ?? a.units ?? 0;
   const amountAtoms = meta.amount != null ? Math.round(Number(meta.amount) * 1e8) : a.amount;
@@ -1421,18 +1462,21 @@ async function pageAsset(name) {
         <h2>Who holds it</h2>
         <table>
           <thead><tr><th>Address</th><th>Amount</th></tr></thead>
-          <tbody>${(a.holders || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">No holders.</td></tr>`}</tbody>
+          <tbody>${(holderPage.items || []).map((h) => `<tr><td>${linkAddr(h.address)}</td><td>${formatAssetAmount(h.amount, a.name, units)}</td></tr>`).join("") || `<tr><td colspan="2" class="empty">No holders.</td></tr>`}</tbody>
         </table>
+        ${pagerHtml("holders-pager", holderPage.total || 0, hState, "holders")}
       </div>
       <div class="card">
         <h2>History</h2>
         <p class="muted">Open a transaction to see who sent this asset.</p>
         <table>
           <thead><tr><th>Block</th><th>What</th><th>Transaction</th></tr></thead>
-          <tbody>${(a.activity || []).map((x) => `<tr><td>${x.height != null ? linkBlock(x.height) : "—"}</td><td>${activityWords(x.kind)}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No activity.</td></tr>`}</tbody>
+          <tbody>${(activityPage.items || []).map((x) => `<tr><td>${x.height != null ? linkBlock(x.height) : "—"}</td><td>${activityWords(x.kind)}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No activity.</td></tr>`}</tbody>
         </table>
+        ${pagerHtml("history-pager", activityPage.total || 0, aState, "history")}
       </div>
     </div>`;
+  bindPagers();
   if (cid) loadAssetMedia(cid, a.ipfs_gateways);
 }
 
@@ -1442,12 +1486,115 @@ function hashQuery() {
   return new URLSearchParams(i >= 0 ? h.slice(i + 1) : "");
 }
 
-function membersHash(scope, q) {
+// Long lists page on the server. The page lives in the hash (?page=2&size=50) so links and Back work.
+const PAGE_SIZES = [25, 50, 100];
+let scrollToPager = "";
+
+function hashPath() {
+  const h = location.hash || "#/";
+  const i = h.indexOf("?");
+  return i >= 0 ? h.slice(0, i) : h;
+}
+
+function pageState(params, key = "page") {
+  const size = PAGE_SIZES.includes(Number(params.get("size"))) ? Number(params.get("size")) : PAGE_SIZES[0];
+  const page = Math.max(1, Math.floor(Number(params.get(key))) || 1);
+  return { page, size, offset: (page - 1) * size };
+}
+
+function withParams(path, values) {
   const p = new URLSearchParams();
-  if (scope && scope !== "eligible") p.set("scope", scope);
-  if (q) p.set("q", q);
+  for (const [k, v] of Object.entries(values)) {
+    if (v === "" || v == null || (k === "size" && Number(v) === PAGE_SIZES[0]) || (/page$|^holders$|^history$/.test(k) && Number(v) === 1)) continue;
+    p.set(k, v);
+  }
   const qs = p.toString();
-  return "#/members" + (qs ? "?" + qs : "");
+  return path + (qs ? "?" + qs : "");
+}
+
+// Same list, other page: keeps every other hash param (scope, q, kind, ...).
+function pageHref(key, page, size) {
+  const params = Object.fromEntries(hashQuery());
+  params[key] = page;
+  if (size) params.size = size;
+  return withParams(hashPath(), params);
+}
+
+function pageNumbers(page, last) {
+  const want = new Set([1, last, page - 1, page, page + 1]);
+  if (page <= 3) [2, 3, 4].forEach((n) => want.add(n));
+  if (page >= last - 2) [last - 1, last - 2, last - 3].forEach((n) => want.add(n));
+  const nums = [...want].filter((n) => n >= 1 && n <= last).sort((a, b) => a - b);
+  const out = [];
+  nums.forEach((n, i) => {
+    if (i && n - nums[i - 1] > 1) out.push(null);
+    out.push(n);
+  });
+  return out;
+}
+
+function pagerHtml(id, total, state, key = "page") {
+  const { page, size, offset } = state;
+  const last = Math.max(1, Math.ceil(total / size));
+  const from = total ? offset + 1 : 0;
+  const to = Math.min(total, offset + size);
+  const link = (n, label, cls = "") => `<a class="pg-btn ${cls}" data-pager-link href="${esc(pageHref(key, n))}"${n === page ? ' aria-current="page"' : ""}>${label}</a>`;
+  const off = (label) => `<span class="pg-btn off" aria-disabled="true">${label}</span>`;
+  const nums = pageNumbers(page, last).map((n) => (n == null ? `<span class="pg-gap">…</span>` : link(n, n.toLocaleString(), n === page ? "on" : ""))).join("");
+  return `<nav class="pager" id="${id}" data-key="${key}" data-last="${last}" aria-label="Pages">
+    <span class="pg-count">${total ? `${from.toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}` : "0 results"}</span>
+    ${last > 1 ? `<span class="pg-nav">
+      ${page > 1 ? link(page - 1, "‹ Prev", "pg-step") : off("‹ Prev")}
+      <span class="pg-nums">${nums}</span>
+      <span class="pg-here">Page ${page} of ${last}</span>
+      ${page < last ? link(page + 1, "Next ›", "pg-step") : off("Next ›")}
+    </span>
+    <form class="pg-jump"><label>Page <input type="number" inputmode="numeric" min="1" max="${last}" value="${page}" aria-label="Go to page" /></label><button type="submit">Go</button></form>` : ""}
+    <label class="pg-size">Show <select aria-label="Rows per page">${PAGE_SIZES.map((n) => `<option value="${n}"${n === size ? " selected" : ""}>${n}</option>`).join("")}</select></label>
+  </nav>`;
+}
+
+// Wire the jump box and size picker of every pager on the page.
+function bindPagers() {
+  document.querySelectorAll(".pager").forEach((nav) => {
+    const key = nav.dataset.key;
+    const last = Number(nav.dataset.last);
+    const state = pageState(hashQuery(), key);
+    nav.querySelectorAll("[data-pager-link]").forEach((a) => a.addEventListener("click", () => { scrollToPager = nav.id; }));
+    const jump = nav.querySelector(".pg-jump");
+    if (jump) {
+      jump.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const n = Math.min(last, Math.max(1, Math.floor(Number(jump.querySelector("input").value)) || 1));
+        scrollToPager = nav.id;
+        location.hash = pageHref(key, n);
+      });
+    }
+    nav.querySelector(".pg-size select").addEventListener("change", (e) => {
+      const size = Number(e.target.value);
+      // Keep the first row on screen visible on the new page size.
+      location.hash = pageHref(key, Math.floor(state.offset / size) + 1, size);
+    });
+  });
+  const target = scrollToPager && document.getElementById(scrollToPager);
+  scrollToPager = "";
+  if (target) {
+    const list = target.closest(".card") || target;
+    list.scrollIntoView({ block: "start" });
+  }
+}
+
+// A page past the end (fewer rows now, or a bigger size) goes to the last page instead of an empty table.
+function clampPage(total, state, key = "page") {
+  const last = Math.max(1, Math.ceil(total / state.size));
+  if (state.page <= last) return false;
+  location.replace(pageHref(key, last));
+  return true;
+}
+
+function membersHash(scope, q) {
+  const size = pageState(hashQuery()).size;
+  return withParams("#/members", { scope: scope === "eligible" ? "" : scope, q, size });
 }
 
 function memberStatusBadges(m) {
@@ -1533,7 +1680,9 @@ async function pageMembers() {
   const params = hashQuery();
   const q = (params.get("q") || "").trim();
   const scope = params.get("scope") === "all" ? "all" : "eligible";
-  const data = await api(`/lottery/members?q=${encodeURIComponent(q)}&scope=${scope}&limit=400`);
+  const state = pageState(params);
+  const data = await api(`/lottery/members?q=${encodeURIComponent(q)}&scope=${scope}&limit=${state.size}&offset=${state.offset}`);
+  if (clampPage(data.total || 0, state)) return;
   const items = data.items || [];
   app.innerHTML = `
     <h1 class="page-title">Eligible members</h1>
@@ -1549,7 +1698,7 @@ async function pageMembers() {
           <button type="button" data-scope="all" class="${scope === "all" ? "on" : ""}">All handles (${data.known_total || 0})</button>
         </div>
       </div>
-      <p class="member-meta">${items.length} shown${q ? ` for “${esc(q)}”` : ""} · ${scope === "eligible" ? "live eligible only" : "every indexed handle"}</p>
+      <p class="member-meta">${(data.total || 0).toLocaleString()} ${data.total === 1 ? "handle" : "handles"}${q ? ` for “${esc(q)}”` : ""} · ${scope === "eligible" ? "live eligible only" : "every indexed handle"}</p>
       <table class="click-rows">
         <thead><tr><th>Handle</th><th>Now</th><th>Wins</th><th>Earned</th><th>Last hat</th></tr></thead>
         <tbody>
@@ -1562,7 +1711,9 @@ async function pageMembers() {
           </tr>`).join("") || `<tr><td colspan="5" class="empty">${q ? "No handle matches that search." : (scope === "eligible" ? "No one is eligible this minute. Try All handles." : "No handles indexed yet.")}</td></tr>`}
         </tbody>
       </table>
+      ${pagerHtml("members-pager", data.total || 0, state)}
     </div>`;
+  bindPagers();
   const form = $("#member-search");
   if (form) {
     form.addEventListener("submit", (e) => {
@@ -1656,17 +1807,21 @@ async function pageLottery() {
 }
 
 async function pageRich() {
-  const data = await api("/rich?limit=50");
+  const state = pageState(hashQuery());
+  const data = await api(`/rich?limit=${state.size}&offset=${state.offset}`);
+  if (clampPage(data.total || 0, state)) return;
   app.innerHTML = `
     <h1 class="page-title">XFER holders</h1>
     <div class="card">
       <table>
         <thead><tr><th>#</th><th>Address</th><th>Balance</th></tr></thead>
         <tbody>
-          ${(data.items || []).map((r, i) => `<tr><td>${i + 1}</td><td>${linkAddr(r.address)}</td><td>${atomsToXfer(r.balance)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No balances yet.</td></tr>`}
+          ${(data.items || []).map((r, i) => `<tr><td>${state.offset + i + 1}</td><td>${linkAddr(r.address)}</td><td>${atomsToXfer(r.balance)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No balances yet.</td></tr>`}
         </tbody>
       </table>
+      ${pagerHtml("rich-pager", data.total || 0, state)}
     </div>`;
+  bindPagers();
 }
 
 async function pageMempool() {
@@ -1849,17 +2004,17 @@ async function pageSearch(q) {
 
 const routes = [
   [/^#\/?$/, pageHome],
-  [/^#\/blocks$/, pageBlocks],
+  [/^#\/blocks(?:\?.*)?$/, pageBlocks],
   [/^#\/block\/(.+)$/, (m) => pageBlock(decodeURIComponent(m[1]))],
   [/^#\/tx\/(.+)$/, (m) => pageTx(decodeURIComponent(m[1]))],
-  [/^#\/address\/(.+)$/, (m) => pageAddress(decodeURIComponent(m[1]))],
-  [/^#\/assets$/, pageAssets],
-  [/^#\/asset\/(.+)$/, (m) => pageAsset(decodeURIComponent(m[1]))],
+  [/^#\/address\/([^?]+)(?:\?.*)?$/, (m) => pageAddress(decodeURIComponent(m[1]))],
+  [/^#\/assets(?:\?.*)?$/, pageAssets],
+  [/^#\/asset\/([^?]+)(?:\?.*)?$/, (m) => pageAsset(decodeURIComponent(m[1]))],
   [/^#\/identity\/(.+)$/, (m) => pageIdentity(decodeURIComponent(m[1]))],
   [/^#\/members(?:\?.*)?$/, pageMembers],
   [/^#\/lottery$/, pageLottery],
   [/^#\/stats$/, pageStats],
-  [/^#\/rich$/, pageRich],
+  [/^#\/rich(?:\?.*)?$/, pageRich],
   [/^#\/trades(?:\?.*)?$/, pageTrades],
   [/^#\/mempool$/, pageMempool],
   [/^#\/network$/, pageNetwork],

@@ -90,7 +90,7 @@ def test_address_history_does_not_scan_every_tx(tmp_path: Path):
     sql = src[src.index("WITH io AS") : src.index('""",', src.index("WITH io AS"))]
     plan = [
         r["detail"]
-        for r in db.conn.execute("EXPLAIN QUERY PLAN " + sql, (A, 50)).fetchall()
+        for r in db.conn.execute("EXPLAIN QUERY PLAN " + sql, (A, 50, 0)).fetchall()
     ]
     text = " | ".join(plan)
     assert "idx_txio_addr" in text, text
