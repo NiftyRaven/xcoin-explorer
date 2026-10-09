@@ -1171,15 +1171,15 @@ async function pageAssets() {
       </div>
       <p class="member-meta">${(data.total || 0).toLocaleString()} ${data.total === 1 ? "asset" : "assets"}${q ? ` for “${esc(q)}”` : ""}</p>
       <table class="click-rows">
-        <thead><tr><th>Name</th><th>Kind</th><th>Amount</th><th>IPFS</th><th>X</th><th>Created</th></tr></thead>
+        <thead><tr><th>Name</th><th>Kind</th><th>Amount</th><th class="hide-sm">IPFS</th><th>X</th><th class="hide-sm">Created</th></tr></thead>
         <tbody>
           ${(data.items || []).map((a) => `<tr data-href="#/asset/${encodeURIComponent(a.name)}">
             <td>${linkAsset(a.name)}</td>
             <td><span class="badge asset">${esc(a.kind || "")}</span></td>
             <td>${formatAssetAmount(a.amount, a.name, a.units)}</td>
-            <td>${assetListIpfsCell(a)}</td>
+            <td class="hide-sm">${assetListIpfsCell(a)}</td>
             <td>${a.x_handle ? handle(a.x_handle) : "—"}</td>
-            <td>${a.created_height != null ? linkBlock(a.created_height) : "—"}</td>
+            <td class="hide-sm">${a.created_height != null ? linkBlock(a.created_height) : "—"}</td>
           </tr>`).join("") || `<tr><td colspan="6" class="empty">${q || kind ? "No asset matches that search." : "No assets yet."}</td></tr>`}
         </tbody>
       </table>
