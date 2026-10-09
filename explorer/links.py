@@ -35,6 +35,7 @@ LAUNCH_MEMO_PREFIXES = ("584c317c", "5842317c")  # "XL1|", "XB1|"
 SIGHASH_ALL = "01"
 MAX_BATCH = 200
 REFRESH_SECONDS = 300.0
+MAX_BLOCK_READS = 400  # per rebuild; blocks not read yet are read on the next refresh
 
 LINKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS address_links (
@@ -125,6 +126,7 @@ class AddressLinks:
         self._built_height = -2
         self._built_at = 0.0
         self._lock = threading.Lock()
+        self._block_reads = MAX_BLOCK_READS
         self.db.conn.executescript(LINKS_SCHEMA)
         self.db.commit()
 
@@ -165,19 +167,35 @@ class AddressLinks:
         out.discard(None)
         return out
 
+    def remember_block(self, txs: Iterable[dict]) -> None:
+        """Cache the sighash check for every spending tx of a ``getblock <hash> 2`` reply."""
+        rows = []
+        for tx in txs:
+            vin = tx.get("vin") if isinstance(tx, dict) else None
+            if not vin or any("coinbase" in v for v in vin) or not tx.get("txid"):
+                continue
+            flags = [sighash_flags((v.get("scriptSig") or {}).get("hex")) for v in vin]
+            rows.append((tx["txid"], 1 if all(f == SIGHASH_ALL for f in flags) else 0))
+        self.db.conn.executemany("INSERT OR REPLACE INTO tx_sighash(txid, all_sighash_all) VALUES(?,?)", rows)
+
     def _all_sighash_all(self, txid: str) -> bool | None:
         row = self.db.conn.execute("SELECT all_sighash_all FROM tx_sighash WHERE txid=?", (txid,)).fetchone()
         if row is not None:
             return bool(row["all_sighash_all"])
-        if self.rpc is None or not getattr(self.rpc, "connected", False):
+        if self.rpc is None or not getattr(self.rpc, "connected", False) or self._block_reads <= 0:
             return None
-        raw = self.rpc.try_call("getrawtransaction", txid, True, default=None)
-        if not isinstance(raw, dict):
+        # Read the whole block: works without txindex, and caches every tx in it at once.
+        tx_row = self.db.conn.execute("SELECT height FROM txs WHERE txid=?", (txid,)).fetchone()
+        if tx_row is None or tx_row["height"] is None:
             return None
-        flags = [sighash_flags((v.get("scriptSig") or {}).get("hex")) for v in raw.get("vin") or []]
-        ok = bool(flags) and all(f == SIGHASH_ALL for f in flags)
-        self.db.conn.execute("INSERT OR REPLACE INTO tx_sighash(txid, all_sighash_all) VALUES(?,?)", (txid, 1 if ok else 0))
-        return ok
+        self._block_reads -= 1
+        block_hash = self.rpc.try_call("getblockhash", int(tx_row["height"]), default=None)
+        block = self.rpc.try_call("getblock", block_hash, 2, default=None) if block_hash else None
+        if not isinstance(block, dict):
+            return None
+        self.remember_block(block.get("tx") or [])
+        row = self.db.conn.execute("SELECT all_sighash_all FROM tx_sighash WHERE txid=?", (txid,)).fetchone()
+        return None if row is None else bool(row["all_sighash_all"])
 
     # ---------- build ----------
 
@@ -192,6 +210,7 @@ class AddressLinks:
 
     def rebuild(self) -> dict:
         with self._lock:
+            self._block_reads = MAX_BLOCK_READS
             self._sync_wallet_links()
             platform = self._platform()
             links: dict[tuple[str, str, str], tuple[str, str | None]] = {}

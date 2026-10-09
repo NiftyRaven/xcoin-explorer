@@ -138,3 +138,53 @@ def test_helpers():
     assert sighash_flags(f"{len(sig) // 2:02x}{sig}21" + "02" * 33) == "01"
     assert sighash_flags("") is None
     assert addresses_in({"vin": [{"address": "XA"}], "x": {"issuer": "XB", "name": "Q"}}) == {"XA", "XB"}
+
+
+def _sig(hashtype: str) -> str:
+    sig = "30" + "00" * 8 + hashtype
+    return f"{len(sig) // 2:02x}{sig}"
+
+
+class _BlockRpc:
+    """Node without txindex: getrawtransaction fails, getblock answers."""
+
+    connected = True
+
+    def __init__(self, blocks):
+        self.blocks = blocks
+        self.calls = []
+
+    def try_call(self, method, *params, default=None):
+        self.calls.append(method)
+        if method == "getblockhash":
+            return f"h{params[0]}"
+        if method == "getblock":
+            return self.blocks.get(params[0], default)
+        return default
+
+
+def test_sighash_read_from_the_block_without_txindex(tmp_path: Path):
+    db = Database(tmp_path / "s.db")
+    db.conn.execute("INSERT INTO txs(txid, height, n) VALUES('a', 7, 1)")
+    db.conn.execute("INSERT INTO txs(txid, height, n) VALUES('b', 7, 2)")
+    block = {
+        "tx": [
+            {"txid": "cb", "vin": [{"coinbase": "00"}]},
+            {"txid": "a", "vin": [{"scriptSig": {"hex": _sig("01")}}, {"scriptSig": {"hex": _sig("01")}}]},
+            {"txid": "b", "vin": [{"scriptSig": {"hex": _sig("01")}}, {"scriptSig": {"hex": _sig("83")}}]},
+        ]
+    }
+    rpc = _BlockRpc({"h7": block})
+    links = AddressLinks(db, rpc)
+    assert links._all_sighash_all("a") is True
+    assert links._all_sighash_all("b") is False  # read from the same block, no second call
+    assert rpc.calls.count("getblock") == 1
+    assert "getrawtransaction" not in rpc.calls
+    assert db.conn.execute("SELECT COUNT(*) FROM tx_sighash WHERE txid='cb'").fetchone()[0] == 0
+
+
+def test_indexed_blocks_fill_the_sighash_cache(tmp_path: Path):
+    db = Database(tmp_path / "s.db")
+    links = AddressLinks(db, None)
+    links.remember_block([{"txid": "c", "vin": [{"scriptSig": {"hex": _sig("01")}}]}])
+    assert links._all_sighash_all("c") is True
