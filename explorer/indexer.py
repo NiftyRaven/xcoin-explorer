@@ -82,6 +82,8 @@ class Indexer:
         }
         self._live_nodes: dict[str, dict] = {}
         self._lock = threading.Lock()
+        # explorer.links.AddressLinks, set by the app. Rebuilt when the index moves.
+        self.links = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -180,6 +182,12 @@ class Indexer:
         self.status["error"] = ""
         self.status["indexing"] = self.status["indexed"] < tip
         self._backfill_today_fill_scripts()
+        if self.links is not None and not self.status["indexing"]:
+            try:
+                self.links.maybe_refresh(self.status["indexed"])
+            except Exception as e:
+                self.db.rollback()
+                self.status["links_error"] = str(e)[:200]
 
     def _backfill_today_fill_scripts(self) -> None:
         """Fill NULL ``op_return`` on today's non-coinbase outputs, and asset units those memos need.

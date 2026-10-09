@@ -922,6 +922,24 @@ class Queries:
             ).fetchall()
         ]
 
+    def handle_addresses(self, handle: str, limit: int = 200) -> list[dict]:
+        """Every address linked to this handle (see explorer.links), strongest proof first."""
+        rows = self.db.conn.execute(
+            """
+            SELECT address, proof, detail, txid FROM address_links WHERE handle=?
+            ORDER BY CASE proof WHEN 'claim' THEN 0 WHEN 'wallet' THEN 1 WHEN 'owner' THEN 2 ELSE 3 END, address
+            """,
+            (norm_handle(handle),),
+        ).fetchall()
+        seen: set[str] = set()
+        out: list[dict] = []
+        for r in rows:
+            if r["address"] in seen:
+                continue
+            seen.add(r["address"])
+            out.append(row_to_dict(r))
+        return out[: paginate(limit, 200, 500)]
+
     def rich_list(self, limit: int = 50) -> list[dict]:
         limit = paginate(limit, 50)
         rows = self.db.conn.execute(

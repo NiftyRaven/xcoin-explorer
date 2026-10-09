@@ -15,7 +15,37 @@ async function api(path) {
     err.status = r.status;
     throw err;
   }
-  return r.json();
+  const data = await r.json();
+  rememberLabels(data);
+  return data;
+}
+
+// Address -> X handles with the proof for each (from the API's `labels`). See explorer/links.py.
+const LABELS = new Map();
+const PROOF_NAMES = {
+  claim: "holds the claimed root",
+  wallet: "wallet-confirmed",
+  owner: "owner token",
+  cospend: "same wallet (spent together)",
+};
+
+function rememberLabels(data) {
+  const labels = data && typeof data === "object" ? data.labels : null;
+  if (!labels || typeof labels !== "object") return;
+  for (const [addr, rows] of Object.entries(labels)) {
+    if (Array.isArray(rows)) LABELS.set(addr, rows);
+  }
+}
+
+function labelHint(row) {
+  return `@${row.handle}: ${PROOF_NAMES[row.proof] || row.proof}${row.detail ? ` (${row.detail})` : ""}`;
+}
+
+function handleChips(addr) {
+  const rows = LABELS.get(addr) || [];
+  if (!rows.length) return "";
+  const chips = rows.map((row) => `<a class="addr-handle" href="https://x.com/${encodeURIComponent(row.handle)}" target="_blank" rel="noopener noreferrer" title="${esc(labelHint(row))}">@${esc(row.handle)}</a>`);
+  return `<span class="addr-handles">${chips.join(" ")}<span class="faint"> · </span></span>`;
 }
 
 function esc(s) {
@@ -253,7 +283,7 @@ function linkTx(id, opts = {}) {
 }
 function linkAddr(a, opts = {}) {
   if (!a) return `<span class="faint">—</span>`;
-  return idHtml(a, { href: "#/address/" + encodeURIComponent(a), left: 8, right: 6, full: !!opts.full });
+  return handleChips(a) + idHtml(a, { href: "#/address/" + encodeURIComponent(a), left: 8, right: 6, full: !!opts.full });
 }
 function assetApiPath(name) {
   return "/asset/" + String(name || "").split("/").map((part) => encodeURIComponent(part)).join("/");
@@ -807,11 +837,12 @@ function assetLinkPlain(name) {
 }
 
 function personHtml(address, handleName) {
-  if (handleName) return handle(handleName);
   if (address) {
     const shown = clipMiddle(address, 8, 6);
-    return `<a class="mono-clip" href="#/address/${encodeURIComponent(address)}" title="${esc(address)}">${esc(shown)}</a>`;
+    const named = handleName && !(LABELS.get(address) || []).some((row) => row.handle === handleName) ? `${handle(handleName)} · ` : "";
+    return `${named}${handleChips(address)}<a class="mono-clip" href="#/address/${encodeURIComponent(address)}" title="${esc(address)}">${esc(shown)}</a>`;
   }
+  if (handleName) return handle(handleName);
   return `<span class="faint">an address this explorer does not have</span>`;
 }
 
@@ -1056,6 +1087,10 @@ function addressTxNet(t) {
 function addressReceipt(a) {
   const lines = [];
   if (a.identity && a.identity.handle) lines.push(`This address is ${handle(a.identity.handle)}.`);
+  for (const row of LABELS.get(a.address) || []) {
+    if (a.identity && row.handle === a.identity.handle) continue;
+    lines.push(`This address belongs to ${handle(row.handle)}: ${esc(PROOF_NAMES[row.proof] || row.proof)}${row.detail ? `, ${esc(row.detail)}` : ""}${row.txid ? ` (${linkTx(row.txid)})` : ""}.`);
+  }
   if (a.burn) lines.push(`This is a special chain address: ${esc(a.burn)}.`);
   lines.push(`It holds ${atomsToXfer(a.balance_atoms)}.`);
   const assets = a.assets || [];
@@ -1074,7 +1109,7 @@ async function pageAddress(addr) {
   const a = await api("/address/" + encodeURIComponent(addr));
   app.innerHTML = `
     <h1 class="page-title">Address</h1>
-    <p class="id-hero">${copyable(a.address)} ${a.identity ? handle(a.identity.handle) : ""}</p>
+    <p class="id-hero">${handleChips(a.address)}${copyable(a.address)}</p>
     ${addressReceipt(a)}
     <div class="grid two">
       <div class="card">
@@ -1444,6 +1479,7 @@ async function pageIdentity(handleName) {
         <b>Heartbeat</b><div>${yesNo(p.heartbeat)}</div>
         <b>Address</b><div>${p.address ? linkAddr(p.address, { full: true }) : `<span class="faint">—</span>`}</div>
         <b>Asset root</b><div>${p.asset ? linkAsset(p.asset) : `<span class="faint">—</span>`}</div>
+        <b>All addresses</b><div>${(p.addresses || []).map((row) => `<div title="${esc(labelHint({ handle: name, proof: row.proof, detail: row.detail }))}">${linkAddr(row.address)} <span class="faint">${esc(PROOF_NAMES[row.proof] || row.proof)}</span></div>`).join("") || `<span class="faint">—</span>`}</div>
         <b>First hat</b><div>${p.first_hat != null ? linkBlock(p.first_hat) : "—"}</div>
         <b>Last hat</b><div>${p.last_hat != null ? linkBlock(p.last_hat) : "—"}</div>
         <b>Last seen</b><div>${p.last_seen ? timeAgo(p.last_seen) : "—"}</div>
@@ -1857,11 +1893,11 @@ function tradeQuery(side, q) {
 }
 
 function tradeWho(t) {
-  if (t.trader_handle) return handle(t.trader_handle);
   const addr = t.trader || "";
-  if (!addr) return `<span class="faint">someone</span>`;
+  if (!addr) return t.trader_handle ? handle(t.trader_handle) : `<span class="faint">someone</span>`;
   const shown = clipMiddle(addr, 6, 4);
-  return `<a class="mono-clip" href="#/address/${encodeURIComponent(addr)}" title="${esc(addr)}">${esc(shown)}</a>`;
+  const named = t.trader_handle && !(LABELS.get(addr) || []).some((row) => row.handle === t.trader_handle) ? `${handle(t.trader_handle)} · ` : "";
+  return `${named}${handleChips(addr)}<a class="mono-clip" href="#/address/${encodeURIComponent(addr)}" title="${esc(addr)}">${esc(shown)}</a>`;
 }
 
 function tradeAssetLink(name) {

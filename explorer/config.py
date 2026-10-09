@@ -74,6 +74,8 @@ class Settings:
     poll_seconds: float = float(BLOCK_TIME_SECONDS)
     # Launch market addresses. Buys pay these; sells are paid by them.
     launch_proceeds: tuple[str, ...] = DEFAULT_LAUNCH_PROCEEDS
+    # Launch relay: wallet-confirmed handle links and platform addresses (public lists only).
+    relay_url: str = "http://127.0.0.1:8787"
 
     def rpc_url(self, port: int | None = None) -> str:
         p = port if port is not None else (self.rpc_port or 38442)
@@ -120,6 +122,7 @@ def load_settings() -> Settings:
     s.batch_size = int(exp.get("batch_size") or s.batch_size)
     s.poll_seconds = float(exp.get("poll_seconds") or s.poll_seconds)
     launch = cfg.get("launch") or {}
+    s.relay_url = os.environ.get("XCOIN_LAUNCH_RELAY_URL", launch.get("relay_url") or s.relay_url)
     env_proceeds = os.environ.get("XFER_LAUNCH_PROCEEDS")
     if env_proceeds is not None:
         s.launch_proceeds = parse_proceeds(env_proceeds, fallback=False)
