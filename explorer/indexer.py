@@ -681,6 +681,8 @@ class Indexer:
             if isinstance(tx, str):
                 tx = self.rpc.call("getrawtransaction", tx, True)
             self._index_tx(tx, height, n, int(block.get("time") or 0), network, lottery)
+        if self.links is not None:
+            self.links.remember_block(t for t in txs if isinstance(t, dict))
 
         producer = lottery["winners"][0]["address"] if lottery["winners"] else None
         seed = None
