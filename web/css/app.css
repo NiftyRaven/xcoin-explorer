@@ -529,3 +529,11 @@ td .id-line { max-width: min(100%, 260px); }
   .pg-nav { flex-basis: 100%; justify-content: space-between; }
   .pg-step, .pg-btn.off { flex: 1; }
 }
+
+/* Phones (360-430px): drop low-priority table columns so lists fit without sideways scrolling. */
+@media (max-width: 560px) {
+  .hide-sm { display: none; }
+  th, td { padding-left: 4px; padding-right: 4px; }
+  th:first-child, td:first-child { padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+}
