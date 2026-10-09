@@ -20,6 +20,7 @@ from explorer.chain import (
     TICKER,
 )
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
+from explorer.links import MAX_BATCH, AddressLinks, addresses_in
 from explorer.queries import Queries, norm_handle
 from explorer.statcache import StaleWhileRefreshCache
 from explorer.supply import CACHE_SECONDS, SupplyCache
@@ -82,7 +83,7 @@ def live_lottery_handles(queries: Queries, indexer, rpc) -> tuple[list[str], lis
     return hat, heartbeat, live if isinstance(live, dict) else None
 
 
-def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | None = None) -> FastAPI:
+def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | None = None, links: AddressLinks | None = None) -> FastAPI:
     app = FastAPI(title="X Coin Explorer", version=__version__)
     app.state.queries = queries
     app.state.indexer = indexer
@@ -95,6 +96,14 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
     )
 
     app.state.supply = SupplyCache(queries.db)
+    if links is None:
+        links = AddressLinks(queries.db, rpc, DEFAULT_LAUNCH_PROCEEDS if launch_proceeds is None else launch_proceeds)
+    app.state.links = links
+
+    def labeled(data: dict, extra: tuple[str, ...] = ()) -> dict:
+        """Attach ``labels``: address -> X handles with their proof, for every address in the reply."""
+        data["labels"] = links.labels(addresses_in(data) | set(extra))
+        return data
     app.state.stats_cache = StaleWhileRefreshCache()
 
     if WEB.exists():
@@ -174,12 +183,12 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
                 return {"unindexed": True, "rpc": raw}
         if not t:
             return JSONResponse({"error": "transaction not found"}, status_code=404)
-        return t
+        return labeled(t)
 
     @app.get("/api/address/{addr}")
     def address(addr: str, limit: int = 50):
         try:
-            return queries.address(addr, limit)
+            return labeled(queries.address(addr, limit), (addr,))
         except (TypeError, IndexError, sqlite3.Error):
             # A bad row used to escape the handler and leave the shared
             # connection unusable for later /api/status and /api/tip calls.
@@ -210,7 +219,7 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         attach_ipfs_fields(a, a.get("rpc") if isinstance(a.get("rpc"), dict) else None)
         if a.get("ipfs_cid"):
             queries.store_ipfs(a["name"], a["ipfs_cid"])
-        return a
+        return labeled(a)
 
     @app.get("/api/ipfs/inspect")
     def ipfs_inspect(cid: str = ""):
@@ -305,7 +314,8 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         profile = queries.handle_profile(name, hat, heartbeat)
         if not profile:
             return JSONResponse({"error": "invalid handle"}, status_code=400)
-        return profile
+        profile["addresses"] = queries.handle_addresses(name)
+        return labeled(profile)
 
     @app.get("/api/stats")
     def stats(pulse: int = 180):
@@ -323,12 +333,21 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
 
     @app.get("/api/rich")
     def rich(limit: int = 50):
-        return {"items": queries.rich_list(limit)}
+        return labeled({"items": queries.rich_list(limit)})
+
+    @app.get("/api/identities")
+    def identities(addrs: str = ""):
+        """Batch lookup: ``?addrs=X1,X2`` (up to 200) -> ``{"labels": {address: [{handle, proof, detail, txid}]}}``."""
+        wanted = [a.strip() for a in addrs.split(",") if a.strip()][:MAX_BATCH]
+        return JSONResponse(
+            {"labels": links.labels(wanted)},
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60"},
+        )
 
     @app.get("/api/trades")
     def trades(side: str = "all", q: str = ""):
         """Launch buys and sells since 12:00 AM America/New_York. Not stored as history."""
-        return app.state.trades.page(side=side, q=q)
+        return labeled(app.state.trades.page(side=side, q=q))
 
     @app.api_route("/api/supply", methods=["GET", "HEAD"])
     def supply():

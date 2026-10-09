@@ -485,3 +485,7 @@ td .id-line { max-width: min(100%, 260px); }
   .trade-link { flex-basis: 100%; }
   .trade-sentence { flex-basis: 100%; }
 }
+
+/* X handle next to an address of a claimed wallet. The address always stays visible. */
+.addr-handles { white-space: nowrap; }
+.addr-handle { font-weight: 600; }

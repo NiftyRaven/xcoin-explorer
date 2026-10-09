@@ -11,6 +11,7 @@ from explorer.api import create_app
 from explorer.config import load_settings
 from explorer.db import Database
 from explorer.indexer import Indexer
+from explorer.links import AddressLinks
 from explorer.queries import Queries
 from explorer.rpc import XCoinRPC
 
@@ -30,9 +31,11 @@ def main() -> None:
     rpc = XCoinRPC(settings)
     rpc.connect()
     indexer = Indexer(db, rpc, settings.batch_size, settings.poll_seconds)
+    links = AddressLinks(db, rpc, settings.launch_proceeds, settings.relay_url)
+    indexer.links = links
     indexer.start()
     queries = Queries(db)
-    app = create_app(queries, indexer, rpc, launch_proceeds=settings.launch_proceeds)
+    app = create_app(queries, indexer, rpc, launch_proceeds=settings.launch_proceeds, links=links)
 
     url = f"http://{host}:{port}"
     print(f"X Coin explorer -> {url}")
