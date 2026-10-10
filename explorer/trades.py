@@ -1694,8 +1694,14 @@ class TradeFeed:
         return rows
 
     def stats(self, *, now: int | None = None, pending: list[dict] | None = None) -> dict:
+        """Headline day fields are a rolling last-24-hours window.
+
+        Field names stay ``trades_today`` / ``volume_today_atoms`` for
+        compatibility. ``day`` / ``day_start`` remain the ET civil day.
+        """
         moment = int(time.time() if now is None else now)
         start, end, key = et_day_window(moment)
+        window_start = moment - 24 * 3600
         confirmed = self.today_confirmed(moment)
         pending_rows = self._pending_today(moment, start, end) if pending is None else pending
         seen = {t["txid"] for t in confirmed}
@@ -1703,12 +1709,24 @@ class TradeFeed:
         count = 0
         waiting = 0
         for trade in confirmed:
+            try:
+                when = int(trade.get("time") or 0)
+            except (TypeError, ValueError):
+                when = 0
+            if not (window_start <= when <= moment):
+                continue
             count += 1
             volume += int(trade.get("xfer_atoms") or 0)
             if trade.get("tokens_pending"):
                 waiting += 1
         for trade in pending_rows:
             if trade.get("txid") in seen:
+                continue
+            try:
+                when = int(trade.get("time") or moment)
+            except (TypeError, ValueError):
+                when = moment
+            if not (window_start <= when <= moment):
                 continue
             count += 1
             volume += int(trade.get("xfer_atoms") or 0)
@@ -1718,6 +1736,7 @@ class TradeFeed:
             "pending": len(pending_rows) + waiting,
             "day_start": start,
             "day": key,
+            "window_start": window_start,
         }
 
     def _all_time(self, chain: list[dict]) -> list[dict]:
@@ -1782,7 +1801,7 @@ class TradeFeed:
 
         ``side`` filters to buys or sells, ``q`` matches asset, @handle,
         address or txid. Paged on the server with ``limit``/``offset``.
-        Stats stay today-only (since 12:00 AM ET).
+        Stats: all-time total plus a rolling last-24-hours window.
         """
         moment = int(time.time() if now is None else now)
         start, end, key = self._begin_day(moment)
@@ -1827,8 +1846,9 @@ class TradeFeed:
         }
 
     def _stats_with(self, everything: list[dict], moment: int, pending: list[dict]) -> dict:
+        """Merge chain + relay into rolling-24h and all-time headline stats."""
         base = self.stats(now=moment, pending=pending)
-        start, end, _ = et_day_window(moment)
+        window_start = moment - 24 * 3600
         count = 0
         volume = 0
         for t in everything:
@@ -1836,10 +1856,11 @@ class TradeFeed:
                 when = int(t.get("time") or 0)
             except (TypeError, ValueError):
                 continue
-            if start <= when < end:
+            if window_start <= when <= moment:
                 count += 1
                 volume += int(t.get("xfer_atoms") or 0)
         base["trades_today"] = max(int(base.get("trades_today") or 0), count)
         base["volume_today_atoms"] = max(int(base.get("volume_today_atoms") or 0), volume)
         base["trades_all_time"] = len(everything)
+        base["window_start"] = window_start
         return base

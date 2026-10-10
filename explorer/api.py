@@ -362,7 +362,7 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
 
     @app.get("/api/trades")
     def trades(side: str = "all", q: str = "", limit: int = 25, offset: int = 0):
-        """Every Launch buy and sell, all time, newest first, paged. Stats are for today (ET)."""
+        """Every Launch buy and sell, all time, newest first, paged. Stats: all-time + last 24h."""
         return labeled(
             app.state.trades.page(side=side, q=q, limit=paginate(limit), offset=page_offset(offset))
         )

@@ -68,6 +68,9 @@ def test_api_all_time_paged_filtered(tmp_path):
     body = c.get("/api/trades?limit=25").json()
     assert body["total"] == 34 and len(body["items"]) == 25 and body["has_more"] is True
     assert body["stats"]["trades_all_time"] == 34
+    assert isinstance(body["stats"].get("trades_today"), int)
+    assert isinstance(body["stats"].get("window_start"), int)
+    assert body["stats"]["trades_today"] <= body["stats"]["trades_all_time"]
     page2 = c.get("/api/trades?limit=25&offset=25").json()
     assert len(page2["items"]) == 9 and page2["has_more"] is False
     seen = {t["txid"] for t in body["items"] + page2["items"]}
