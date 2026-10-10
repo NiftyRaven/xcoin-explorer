@@ -449,6 +449,7 @@ def test_feed_orders_filters_and_skips_non_trades(tmp_path: Path):
     assert "height" not in stats
     assert "trades_last_hour" not in stats
     assert "volume_24h_atoms" not in stats
+    assert isinstance(stats.get("window_start"), int)
 
     sells = client.get("/api/trades?side=sell")
     assert [item["txid"] for item in sells.json()["items"]] == [sell["txid"]]
@@ -489,13 +490,19 @@ def test_feed_orders_filters_and_skips_non_trades(tmp_path: Path):
     assert 'href="#/trades"' in html
     assert ">Trades<" in html
     assert "pageTrades" in js
-    assert "since midnight ET" in js
+    assert "Last 24 hours is a rolling window" in js
     assert "all time" in js
     assert "Confirmed means the trade is in a block." in js
     assert "No Launch trades yet." in js
     assert "trades-pager" in js
-    assert "Trades today" in js
-    assert "XFER volume today" in js
+    assert "All-time trades" in js
+    assert "Last 24 hours" in js
+    assert "XFER volume (last 24 hours)" in js
+    assert "Showing" in js
+    assert "trade-showing" in js
+    assert "Trades today" not in js
+    assert "XFER volume today" not in js
+    assert "since midnight ET" not in js
     assert "Load older" not in js
     assert "load older" not in js.lower()
     assert "trade-in" in js
@@ -674,8 +681,11 @@ def _assert_day_rollover(db_path: Path, start: int, end: int, day_key: str, next
     assert tomorrow["txid"] not in noon_ids
     assert old_mem not in noon_ids
     assert noon["stats"]["pending"] == 1
-    assert noon["stats"]["trades_today"] == 3
-    assert noon["stats"]["volume_today_atoms"] == 10 * COIN + 10 * COIN + 8 * COIN
+    # Rolling 24h from noon excludes LATE (timestamp near next midnight).
+    assert noon["stats"]["trades_today"] == 2
+    assert noon["stats"]["volume_today_atoms"] == 10 * COIN + 8 * COIN
+    assert noon["stats"]["trades_all_time"] == 3
+    assert noon["stats"]["window_start"] == (start + 12 * 3600) - 24 * 3600
     assert {row["txid"] for row in feed._day_trades} == {today["txid"], late["txid"]}
 
     at_open = feed.page(now=start)
@@ -698,6 +708,8 @@ def _assert_day_rollover(db_path: Path, start: int, end: int, day_key: str, next
     assert rolled["stats"]["trades_today"] == 1
     assert rolled["stats"]["pending"] == 0
     assert rolled["stats"]["volume_today_atoms"] == 10 * COIN
+    assert rolled["stats"]["trades_all_time"] == 1
+    assert rolled["stats"]["window_start"] == end - 24 * 3600
     assert feed._day_key == next_key
     assert {row["txid"] for row in feed._day_trades} == {tomorrow["txid"]}
     assert _table_names(db) == tables
