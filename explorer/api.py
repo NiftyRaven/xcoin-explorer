@@ -83,7 +83,7 @@ def live_lottery_handles(queries: Queries, indexer, rpc) -> tuple[list[str], lis
     return hat, heartbeat, live if isinstance(live, dict) else None
 
 
-def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | None = None, links: AddressLinks | None = None) -> FastAPI:
+def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | None = None, links: AddressLinks | None = None, relay_trades=None) -> FastAPI:
     app = FastAPI(title="X Coin Explorer", version=__version__)
     app.state.queries = queries
     app.state.indexer = indexer
@@ -94,6 +94,7 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         indexer,
         DEFAULT_LAUNCH_PROCEEDS if launch_proceeds is None else launch_proceeds,
     )
+    app.state.trades.relay = relay_trades
 
     app.state.supply = SupplyCache(queries.db)
     if links is None:
@@ -360,9 +361,11 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         )
 
     @app.get("/api/trades")
-    def trades(side: str = "all", q: str = ""):
-        """Launch buys and sells since 12:00 AM America/New_York. Not stored as history."""
-        return labeled(app.state.trades.page(side=side, q=q))
+    def trades(side: str = "all", q: str = "", limit: int = 25, offset: int = 0):
+        """Every Launch buy and sell, all time, newest first, paged. Stats are for today (ET)."""
+        return labeled(
+            app.state.trades.page(side=side, q=q, limit=paginate(limit), offset=page_offset(offset))
+        )
 
     @app.api_route("/api/supply", methods=["GET", "HEAD"])
     def supply():

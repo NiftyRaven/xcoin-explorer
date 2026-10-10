@@ -424,7 +424,7 @@ def test_feed_orders_filters_and_skips_non_trades(tmp_path: Path):
         }
     )
     client, app = _feed_client(db, rpc)
-    first = client.get("/api/trades?limit=2")
+    first = client.get("/api/trades?limit=3")
     assert first.status_code == 200
     body = first.json()
     assert [item["txid"] for item in body["items"]] == [mem_id, buy["txid"], sell["txid"]]
@@ -470,7 +470,7 @@ def test_feed_orders_filters_and_skips_non_trades(tmp_path: Path):
 
     ignored = client.get(
         "/api/trades",
-        params={"limit": 1, "before": start - 1, "before_n": 0},
+        params={"limit": 5, "before": start - 1, "before_n": 0},
     )
     ignored_body = ignored.json()
     ignored_ids = [item["txid"] for item in ignored_body["items"]]
@@ -490,9 +490,10 @@ def test_feed_orders_filters_and_skips_non_trades(tmp_path: Path):
     assert ">Trades<" in html
     assert "pageTrades" in js
     assert "since midnight ET" in js
-    assert "Older ones stay on the chain." in js
+    assert "all time" in js
     assert "Confirmed means the trade is in a block." in js
-    assert "No Launch trades yet today." in js
+    assert "No Launch trades yet." in js
+    assert "trades-pager" in js
     assert "Trades today" in js
     assert "XFER volume today" in js
     assert "Load older" not in js

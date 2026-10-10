@@ -1720,43 +1720,126 @@ class TradeFeed:
             "day": key,
         }
 
+    def _all_time(self, chain: list[dict]) -> list[dict]:
+        """Every Launch trade the relay settled, all time, plus chain-only ones.
+
+        A chain-classified trade wins over the relay copy of the same txid
+        (it already knows confirmations and the real trader).
+        """
+        from explorer.launch_trades import finish, platform_addresses, resolve_trader
+
+        relay = getattr(self, "relay", None)
+        rows = relay.rows() if relay is not None else []
+        by_tx: dict[str, dict] = {}
+        for t in chain:
+            if t.get("txid"):
+                by_tx[t["txid"]] = t
+        platform = platform_addresses(self.proceeds)
+        fresh: list[dict] = []
+        for t in rows:
+            txid = t.get("txid") or ""
+            if not txid or txid in by_tx:
+                continue
+            t = dict(t)
+            t["trader"] = resolve_trader(self.db, t, platform)
+            by_tx[txid] = t
+            fresh.append(t)
+        if fresh:
+            metas = {}
+            try:
+                marks = ",".join("?" * len(fresh))
+                for r in self.db.conn.execute(
+                    f"SELECT txid, height, n, time FROM txs WHERE txid IN ({marks})",
+                    [t["txid"] for t in fresh],
+                ).fetchall():
+                    metas[r["txid"]] = r
+            except Exception:
+                metas = {}
+            handles = self._handles(sorted({t["trader"] for t in fresh if t.get("trader")}))
+            tip = self.tip_height()
+            for t in fresh:
+                meta = metas.get(t["txid"])
+                h = int(meta["height"]) if meta is not None and meta["height"] is not None else None
+                t["height"] = h
+                t["n"] = int(meta["n"]) if meta is not None and meta["n"] is not None else None
+                if meta is not None and meta["time"]:
+                    t["time"] = int(meta["time"])
+                t["confirmations"] = max(0, tip - h + 1) if h is not None and tip >= 0 else 0
+                t["confirmed"] = h is not None and not t.get("tokens_pending")
+                finish(t, handles.get(t["trader"], ""))
+        return list(by_tx.values())
+
     def page(
         self,
         *,
         side: str = "all",
         q: str = "",
         now: int | None = None,
+        limit: int = 25,
+        offset: int = 0,
     ) -> dict:
-        """Today's Launch trades, buys and sells mixed, newest first.
+        """Every Launch trade, all time, buys and sells mixed, newest first.
 
-        No history before 12:00 AM ET. ``side`` filters to buys or sells.
+        ``side`` filters to buys or sells, ``q`` matches asset, @handle,
+        address or txid. Paged on the server with ``limit``/``offset``.
+        Stats stay today-only (since 12:00 AM ET).
         """
         moment = int(time.time() if now is None else now)
         start, end, key = self._begin_day(moment)
         side = side if side in ("buy", "sell") else "all"
         query = (q or "").strip()[:200]
+        try:
+            limit = max(1, min(int(limit), 100))
+        except (TypeError, ValueError):
+            limit = 25
+        try:
+            offset = max(0, int(offset or 0))
+        except (TypeError, ValueError):
+            offset = 0
         handle_addrs: set[str] = set()
         if query:
             handle_addrs = self._handle_addresses(query)
         pending = self._pending_today(moment, start, end)
         confirmed = self.today_confirmed(moment)
-        items: list[dict] = []
+        chain: list[dict] = []
         seen: set[str] = set()
         for trade in list(pending) + list(confirmed):
             txid = trade.get("txid") or ""
             if txid in seen:
                 continue
-            if not self._match(trade, side, query, handle_addrs):
-                continue
             seen.add(txid)
-            items.append(trade)
+            chain.append(trade)
+        everything = self._all_time(chain)
+        items = [t for t in everything if self._match(t, side, query, handle_addrs)]
         items.sort(key=_public_newest_key, reverse=True)
+        total = len(items)
         return {
-            "items": items,
-            "stats": self.stats(now=moment, pending=pending),
-            "has_more": False,
+            "items": items[offset : offset + limit],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "all_time": True,
+            "stats": self._stats_with(everything, moment, pending),
+            "has_more": offset + limit < total,
             "day_start": start,
             "day_end": end,
             "day": key,
-            "proceeds": list(self.proceeds),
         }
+
+    def _stats_with(self, everything: list[dict], moment: int, pending: list[dict]) -> dict:
+        base = self.stats(now=moment, pending=pending)
+        start, end, _ = et_day_window(moment)
+        count = 0
+        volume = 0
+        for t in everything:
+            try:
+                when = int(t.get("time") or 0)
+            except (TypeError, ValueError):
+                continue
+            if start <= when < end:
+                count += 1
+                volume += int(t.get("xfer_atoms") or 0)
+        base["trades_today"] = max(int(base.get("trades_today") or 0), count)
+        base["volume_today_atoms"] = max(int(base.get("volume_today_atoms") or 0), volume)
+        base["trades_all_time"] = len(everything)
+        return base

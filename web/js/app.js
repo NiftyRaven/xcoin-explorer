@@ -2032,17 +2032,17 @@ function stopTradePoll() {
 }
 
 function tradesHash(side, q) {
-  const p = new URLSearchParams();
-  if (side && side !== "all") p.set("side", side);
-  if (q) p.set("q", q);
-  const qs = p.toString();
-  return "#/trades" + (qs ? "?" + qs : "");
+  const size = pageState(hashQuery()).size;
+  return withParams("#/trades", { side: side && side !== "all" ? side : "", q, size });
 }
 
-function tradeQuery(side, q) {
+function tradeQuery(side, q, state) {
   const p = new URLSearchParams();
   if (side && side !== "all") p.set("side", side);
   if (q) p.set("q", q);
+  const st = state || { size: PAGE_SIZES[0], offset: 0 };
+  p.set("limit", st.size);
+  if (st.offset) p.set("offset", st.offset);
   const qs = p.toString();
   return "/trades" + (qs ? "?" + qs : "");
 }
@@ -2128,6 +2128,7 @@ function tradeStatsHtml(s) {
     <div class="card stat"><span>Trades today</span><b>${stats.trades_today ?? 0}</b></div>
     <div class="card stat"><span>XFER volume today</span><b>${atomsToXfer(stats.volume_today_atoms)}</b></div>
     <div class="card stat"><span>Pending</span><b>${stats.pending ?? 0}</b></div>
+    <div class="card stat"><span>All-time trades</span><b>${stats.trades_all_time ?? "—"}</b></div>
   </div>`;
 }
 
@@ -2163,7 +2164,12 @@ function renderTradeList(freshIds) {
   const fresh = freshIds instanceof Set ? freshIds : new Set();
   list.innerHTML = items.length
     ? items.map((t) => tradeCard(t, fresh.has(t.txid) ? "trade-in" : "")).join("")
-    : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet today."}</div></div>`;
+    : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet."}</div></div>`;
+  const slot = $("#trade-pager-slot");
+  if (slot) {
+    slot.innerHTML = pagerHtml("trades-pager", tradeView.total || 0, tradeView.state);
+    bindPagers();
+  }
 }
 
 async function refreshTradeHead() {
@@ -2171,7 +2177,7 @@ async function refreshTradeHead() {
   const hash = location.hash || "";
   if (!hash.startsWith("#/trades")) return;
   try {
-    const data = await api(tradeQuery(tradeView.side, tradeView.q));
+    const data = await api(tradeQuery(tradeView.side, tradeView.q, tradeView.state));
     if ((location.hash || "") !== hash) return;
     const stats = $("#trade-stats");
     if (stats) stats.outerHTML = tradeStatsHtml(data.stats);
@@ -2182,6 +2188,7 @@ async function refreshTradeHead() {
       if (t.txid && !prev.has(t.txid)) fresh.add(t.txid);
     }
     tradeView.items = incoming;
+    tradeView.total = data.total ?? incoming.length;
     renderTradeList(fresh);
   } catch {
     /* next poll retries */
@@ -2201,10 +2208,11 @@ async function pageTrades() {
   const params = hashQuery();
   const side = params.get("side") === "buy" || params.get("side") === "sell" ? params.get("side") : "all";
   const q = (params.get("q") || "").trim();
-  tradeView = { side, q, items: [] };
+  const state = pageState(params);
+  tradeView = { side, q, items: [], state, total: 0 };
   app.innerHTML = `
     <h1 class="page-title">Trades</h1>
-    <p class="sub">Today’s Launch trades, since midnight ET. Buys and sells are listed together, newest first. Use Buys or Sells to filter. Older ones stay on the chain. Confirmed means the trade is in a block. Tokens on the way means the tokens are not delivered yet. BOOK means the order book filled it.</p>
+    <p class="sub">Every Launch trade from every user, all time: listings, order book, and auctions. Buys and sells are listed together, newest first. Use Buys or Sells, or search by asset, @handle, or address. The day stats count since midnight ET. Confirmed means the trade is in a block. Tokens on the way means the tokens are not delivered yet. BOOK means the order book filled it.</p>
     <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
     <div class="toolbar">
       <div class="tabs" id="trade-tabs">
@@ -2217,7 +2225,8 @@ async function pageTrades() {
         <button type="submit">Filter</button>
       </form>
     </div>
-    <div class="trade-list" id="trade-list"><div class="card"><div class="loading">Loading trades…</div></div></div>`;
+    <div class="trade-list" id="trade-list"><div class="card"><div class="loading">Loading trades…</div></div></div>
+    <div id="trade-pager-slot"></div>`;
   document.querySelectorAll("#trade-tabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
       const next = btn.getAttribute("data-side") || "all";
@@ -2234,8 +2243,10 @@ async function pageTrades() {
     });
   }
   try {
-    const data = await api(tradeQuery(side, q));
+    const data = await api(tradeQuery(side, q, state));
+    if (clampPage(data.total || 0, state)) return;
     tradeView.items = data.items || [];
+    tradeView.total = data.total ?? tradeView.items.length;
     const slot = $("#trade-stats-slot");
     if (slot) slot.innerHTML = tradeStatsHtml(data.stats);
     renderTradeList();

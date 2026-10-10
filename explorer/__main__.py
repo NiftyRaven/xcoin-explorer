@@ -35,7 +35,12 @@ def main() -> None:
     indexer.links = links
     indexer.start()
     queries = Queries(db)
-    app = create_app(queries, indexer, rpc, launch_proceeds=settings.launch_proceeds, links=links)
+    from explorer.launch_trades import RelayTrades
+
+    app = create_app(
+        queries, indexer, rpc, launch_proceeds=settings.launch_proceeds, links=links,
+        relay_trades=RelayTrades(settings.relay_url),
+    )
 
     url = f"http://{host}:{port}"
     print(f"X Coin explorer -> {url}")
