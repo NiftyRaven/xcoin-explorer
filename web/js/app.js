@@ -2124,12 +2124,23 @@ function tradeCard(t, extra) {
 
 function tradeStatsHtml(s) {
   const stats = s || {};
+  const allTime = stats.trades_all_time ?? 0;
   return `<div class="grid stats" id="trade-stats">
-    <div class="card stat"><span>Trades today</span><b>${stats.trades_today ?? 0}</b></div>
-    <div class="card stat"><span>XFER volume today</span><b>${atomsToXfer(stats.volume_today_atoms)}</b></div>
+    <div class="card stat"><span>All-time trades</span><b>${allTime}</b></div>
+    <div class="card stat"><span>Last 24 hours</span><b>${stats.trades_today ?? 0}</b></div>
+    <div class="card stat"><span>XFER volume (last 24 hours)</span><b>${atomsToXfer(stats.volume_today_atoms)}</b></div>
     <div class="card stat"><span>Pending</span><b>${stats.pending ?? 0}</b></div>
-    <div class="card stat"><span>All-time trades</span><b>${stats.trades_all_time ?? "—"}</b></div>
   </div>`;
+}
+
+function tradeShowingHtml(total, state) {
+  const n = Number(total) || 0;
+  const offset = state && state.offset != null ? Number(state.offset) : 0;
+  const size = state && state.size != null ? Number(state.size) : 25;
+  if (!n) return `<p class="muted trade-showing" id="trade-showing">Showing 0 of 0</p>`;
+  const from = offset + 1;
+  const to = Math.min(n, offset + size);
+  return `<p class="muted trade-showing" id="trade-showing">Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${n.toLocaleString()}</p>`;
 }
 
 function tradeRecency(t) {
@@ -2165,6 +2176,11 @@ function renderTradeList(freshIds) {
   list.innerHTML = items.length
     ? items.map((t) => tradeCard(t, fresh.has(t.txid) ? "trade-in" : "")).join("")
     : `<div class="card"><div class="empty">${tradeView.q ? "No Launch trades match that search." : "No Launch trades yet."}</div></div>`;
+  const showing = tradeShowingHtml(tradeView.total || 0, tradeView.state);
+  for (const id of ["trade-showing-top", "trade-showing-bottom"]) {
+    const el = document.getElementById(id);
+    if (el) el.outerHTML = showing.replace('id="trade-showing"', `id="${id}"`);
+  }
   const slot = $("#trade-pager-slot");
   if (slot) {
     slot.innerHTML = pagerHtml("trades-pager", tradeView.total || 0, tradeView.state);
@@ -2212,7 +2228,7 @@ async function pageTrades() {
   tradeView = { side, q, items: [], state, total: 0 };
   app.innerHTML = `
     <h1 class="page-title">Trades</h1>
-    <p class="sub">Every Launch trade from every user, all time: listings, order book, and auctions. Buys and sells are listed together, newest first. Use Buys or Sells, or search by asset, @handle, or address. The day stats count since midnight ET. Confirmed means the trade is in a block. Tokens on the way means the tokens are not delivered yet. BOOK means the order book filled it.</p>
+    <p class="sub">Every Launch trade from every user, all time: listings, order book, and auctions. Buys and sells are listed together, newest first. Use Buys or Sells, or search by asset, @handle, or address. Last 24 hours is a rolling window, not a calendar day. Confirmed means the trade is in a block. Tokens on the way means the tokens are not delivered yet. BOOK means the order book filled it.</p>
     <div id="trade-stats-slot">${tradeStatsHtml(null)}</div>
     <div class="toolbar">
       <div class="tabs" id="trade-tabs">
@@ -2225,7 +2241,9 @@ async function pageTrades() {
         <button type="submit">Filter</button>
       </form>
     </div>
+    <div id="trade-showing-top"><p class="muted trade-showing">Showing 0 of 0</p></div>
     <div class="trade-list" id="trade-list"><div class="card"><div class="loading">Loading trades…</div></div></div>
+    <div id="trade-showing-bottom"><p class="muted trade-showing">Showing 0 of 0</p></div>
     <div id="trade-pager-slot"></div>`;
   document.querySelectorAll("#trade-tabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
