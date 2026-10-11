@@ -23,7 +23,8 @@ A plain recipient never inherits a handle. Platform addresses (treasury, reserve
 escrow keys, the relay's platform list, and every address of a platform handle) never get
 a user handle. Until that relay list has loaded once, a change output gets no handle: it
 might be a platform address this process has not seen yet. A failed relay call keeps the
-previous list.
+previous list. So does an empty list, or one under half the size of the last good list.
+A list that is kept is merged in: addresses are only added for the rest of the run.
 
 ``address_links`` is a snapshot. The indexer rebuilds it when new blocks land (only the
 new transactions, when the relay list is already loaded) and in full on a slow timer so
@@ -35,11 +36,14 @@ a change address in that tx resolves before the tx is in a block.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import urllib.request
 from collections import Counter, defaultdict
 from typing import Callable, Iterable
+
+log = logging.getLogger(__name__)
 
 PLATFORM_HANDLES = frozenset({"launch_xfer"})
 PROOF_RANK = {"claim": 0, "wallet": 1, "owner": 2, "cospend": 3}
@@ -202,9 +206,11 @@ class AddressLinks:
     def _refresh_relay_platform(self) -> bool:
         """Load ``/api/launch/platform-addresses``. Failure keeps the previous list.
 
-        A body of ``{"addresses": [...]}`` is success, including an empty list (that
-        list is the source of truth). ``None``, a non-object, or a missing / non-list
-        ``addresses`` field is failure and does not change what was saved.
+        ``None``, a non-object, or a missing / non-list ``addresses`` field is failure.
+        An empty list is failure too, and so is a list under half the size of the last
+        good one: a short reply must not drop platform addresses already learned.
+        A list that is accepted is united with the previous one. Addresses are only
+        added for the rest of this process.
         """
         if not self.relay_url:
             self._relay_platform_ok = True
@@ -212,7 +218,18 @@ class AddressLinks:
         data = self._relay("/api/launch/platform-addresses")
         if not isinstance(data, dict) or not isinstance(data.get("addresses"), list):
             return False
-        self._relay_platform = {str(a) for a in data["addresses"] if str(a).startswith("X")}
+        incoming = {str(a) for a in data["addresses"] if str(a).startswith("X")}
+        previous = self._relay_platform
+        # Strictly under half. An empty reply is always too small, including the
+        # first fetch, so change labels stay off until a real list arrives.
+        if not incoming or (len(previous) > 0 and len(incoming) * 2 < len(previous)):
+            log.warning(
+                "relay platform list rejected (%d addresses, previous %d); keeping the previous list",
+                len(incoming),
+                len(previous),
+            )
+            return False
+        self._relay_platform = previous | incoming
         self._relay_platform_ok = True
         return True
 

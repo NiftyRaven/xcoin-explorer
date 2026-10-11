@@ -1,5 +1,6 @@
 """Address -> X handle links: only provable ones, never a plain recipient."""
 
+import logging
 import time
 from pathlib import Path
 
@@ -513,16 +514,58 @@ def test_failed_relay_keeps_platform_list_and_skips_unknown_change(tmp_path: Pat
 
     mode["kind"] = "empty"
     links.rebuild()
-    assert links._relay_platform == set()
+    assert links._relay_platform == {RELAY_ONLY, OTHER_PLATFORM}
     assert links._relay_platform_ok is True
+    assert _handles(links, RELAY_ONLY) == set()
 
     mode["kind"] = "bad"
     links.rebuild()
-    assert links._relay_platform == set()
+    assert links._relay_platform == {RELAY_ONLY, OTHER_PLATFORM}
     mode["kind"] = "missing"
     links.rebuild()
-    assert links._relay_platform == set()
+    assert links._relay_platform == {RELAY_ONLY, OTHER_PLATFORM}
     assert links._relay_platform_ok is True
+    assert _handles(links, RELAY_ONLY) == set()
+    db.close()
+
+
+def test_relay_platform_list_rejects_shrink_and_merges(tmp_path: Path, caplog):
+    """Empty or under half the last list is ignored. A large enough list only adds."""
+    old = [f"XOld{i:02d}Plat111111111111111111" for i in range(10)]
+    shrunk = [f"XShrunk{i:02d}Plat11111111111111" for i in range(4)]
+    extra = "XAdded90Plat111111111111111111"
+    merged_in = old[2:] + [extra]
+    assert len(shrunk) * 2 < len(old)
+    assert len(merged_in) * 2 >= len(old)
+    mode = {"kind": "list", "addresses": list(old)}
+    db = Database(tmp_path / "ratio.db")
+    links = AddressLinks(db, None, (), "http://relay", fetch_json=_relay_fetch(mode))
+
+    assert links._refresh_relay_platform() is True
+    assert links._relay_platform == set(old)
+
+    mode["kind"] = "empty"
+    with caplog.at_level(logging.WARNING):
+        assert links._refresh_relay_platform() is False
+    assert links._relay_platform == set(old)
+    assert any("0 addresses, previous 10" in rec.message for rec in caplog.records)
+
+    caplog.clear()
+    mode["kind"] = "list"
+    mode["addresses"] = shrunk
+    with caplog.at_level(logging.WARNING):
+        assert links._refresh_relay_platform() is False
+    assert links._relay_platform == set(old)
+    assert shrunk[0] not in links._relay_platform
+    assert any("4 addresses, previous 10" in rec.message for rec in caplog.records)
+
+    caplog.clear()
+    mode["addresses"] = merged_in
+    assert links._refresh_relay_platform() is True
+    assert links._relay_platform == set(old) | {extra}
+    assert extra in links._relay_platform
+    assert old[0] in links._relay_platform
+    assert not any("rejected" in rec.message for rec in caplog.records)
     db.close()
 
 
@@ -536,7 +579,7 @@ def test_cold_start_without_relay_list_does_not_label_change(tmp_path: Path):
         calls["n"] += 1
         if not calls["up"] or not url.endswith("/api/launch/platform-addresses"):
             return None
-        return {"addresses": []}
+        return {"addresses": ["XRelayCameBack1111111111111111"]}
 
     db = Database(tmp_path / "norelay.db")
     links = AddressLinks(db, None, (), "http://relay", fetch_json=fetch)
