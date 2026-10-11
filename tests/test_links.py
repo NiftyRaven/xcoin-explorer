@@ -243,9 +243,9 @@ class _MempoolRpc:
 def test_fresh_change_address_shows_on_tx_trades_and_block(tmp_path: Path):
     """A new change address is labeled from the tx that created it, before the timer.
 
-    The snapshot is rebuilt once for the claim, then the fresh trade is inserted
-    and not rebuilt by the test. Tx, trades, and block pages must still show the
-    handle, and so must a mempool trade that spends the same wallet.
+    The snapshot is rebuilt once for the claim, then the fresh trade is inserted.
+    A page read does not rebuild. The indexer pass does, and tx, trades, and
+    block pages then show the handle, including a mempool trade from that wallet.
     """
     from explorer.chain import COIN
     from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, LAUNCH_TREASURY
@@ -317,8 +317,18 @@ def test_fresh_change_address_shows_on_tx_trades_and_block(tmp_path: Path):
     )
     db.commit()
     # The fresh tx is in the index and the handle snapshot is still the old one.
+    # A page read must not walk the chain (that used to take ~1.6s). The indexer does.
     assert links.stale()
     assert links._built_height == -1
+    gen = links.generation
+    built_at = links._built_at
+    assert links.labels([change]) == {}
+    assert links.generation == gen
+    assert links._built_at == built_at
+    assert links.refresh_index(db.indexed_height())
+    assert links._built_at == built_at
+    assert links.generation == gen + 1
+    assert _handles(links, change) == {("evil", "cospend")}
 
     raw_mem = {
         "txid": mem_id,
@@ -381,4 +391,181 @@ def test_fresh_change_address_shows_on_tx_trades_and_block(tmp_path: Path):
     assert handle_of(holders, change) == "evil"
     activity = client.get("/api/asset-activity/OTHER/CHILD").json()
     assert handle_of(activity, change) == "evil"
+    db.close()
+
+
+RELAY_ONLY = "XnpbTRVX1eCXj4KFPV781Z8VXXgfTuvgiT"
+OTHER_PLATFORM = "XOtherPlatform111111111111111111"
+
+
+def _relay_fetch(mode: dict):
+    def fetch(url):
+        if url.endswith("/api/identity/wallet-links"):
+            return {"links": []}
+        if not url.endswith("/api/launch/platform-addresses"):
+            return None
+        kind = mode.get("kind")
+        if kind == "list":
+            return {"addresses": list(mode.get("addresses") or [])}
+        if kind == "empty":
+            return {"addresses": []}
+        if kind == "bad":
+            return {"addresses": "nope"}
+        if kind == "missing":
+            return {"ok": True}
+        return None
+
+    return fetch
+
+
+def _change_pair(db, wallet, payee, fresh, txid, height):
+    """Pay ``payee`` (already seen) and one new ``fresh`` output from ``wallet``."""
+    _tx(
+        db,
+        txid,
+        height,
+        ins=[(wallet, None, ("seed", 0))],
+        outs=[_out(payee), _out(fresh)],
+    )
+
+
+def test_cold_start_relay_only_platform_change_gets_no_handle(tmp_path: Path):
+    """A relay-only platform address used as change is not a user's handle.
+
+    The snapshot has never been built. The first read must fetch the relay list
+    before the change rule runs. The same address in a mempool tx stays unlabeled.
+    """
+    wallet = "XNiftyWallet111111111111111111"
+    payee = "XSeenPayee11111111111111111111"
+    user_change = "XUserChange1111111111111111111"
+    mode = {"kind": "list", "addresses": [RELAY_ONLY]}
+    calls: list[str] = []
+
+    def fetch(url):
+        calls.append(url)
+        return _relay_fetch(mode)(url)
+
+    db = Database(tmp_path / "cold.db")
+    links = AddressLinks(db, None, (), "http://relay", fetch_json=fetch)
+    assert links._relay_platform_ok is False
+    db.conn.execute(
+        "INSERT INTO identities(handle, asset, address, txid) VALUES('ravennifty', 'RN', ?, 'claim')",
+        (wallet,),
+    )
+    _tx(db, "seed", 1, ins=[(wallet, None, ("z", 0))], outs=[_out(payee), _out(wallet)])
+    _change_pair(db, wallet, payee, RELAY_ONLY, "a2749a2e", 2)
+    _change_pair(db, wallet, payee, user_change, "userchange", 3)
+    db.commit()
+    assert links._built_height == -2
+    assert calls == []
+
+    got = links.labels([RELAY_ONLY, user_change, wallet])
+    assert any(url.endswith("/api/launch/platform-addresses") for url in calls)
+    assert links._relay_platform_ok is True
+    assert RELAY_ONLY in links._relay_platform
+    assert got.get(RELAY_ONLY, []) == []
+    assert _handles(links, user_change) == {("ravennifty", "cospend")}
+    assert _handles(links, wallet) == {("ravennifty", "claim")}
+
+    links.observe_tx(
+        {
+            "txid": "ee" * 32,
+            "sighash_all": True,
+            "vin": [{"address": wallet}],
+            "vout": [
+                {"address": payee, "value": 1000},
+                {"address": RELAY_ONLY, "value": 500},
+            ],
+        }
+    )
+    assert _handles(links, RELAY_ONLY) == set()
+    db.close()
+
+
+def test_failed_relay_keeps_platform_list_and_skips_unknown_change(tmp_path: Path):
+    wallet = "XNiftyWallet111111111111111111"
+    payee = "XSeenPayee11111111111111111111"
+    user_change = "XUserChange1111111111111111111"
+    mode = {"kind": "list", "addresses": [RELAY_ONLY, OTHER_PLATFORM]}
+    db = Database(tmp_path / "keep.db")
+    links = AddressLinks(db, None, (TREASURY,), "http://relay", fetch_json=_relay_fetch(mode))
+    db.conn.execute(
+        "INSERT INTO identities(handle, asset, address, txid) VALUES('ravennifty', 'RN', ?, 'claim')",
+        (wallet,),
+    )
+    _tx(db, "seed", 1, ins=[(wallet, None, ("z", 0))], outs=[_out(payee), _out(wallet)])
+    _change_pair(db, wallet, payee, RELAY_ONLY, "a2749a2e", 2)
+    _change_pair(db, wallet, payee, user_change, "userchange", 3)
+    db.commit()
+
+    links.rebuild()
+    assert links._relay_platform == {RELAY_ONLY, OTHER_PLATFORM}
+    assert _handles(links, RELAY_ONLY) == set()
+    assert _handles(links, user_change) == {("ravennifty", "cospend")}
+
+    mode["kind"] = "down"
+    links.rebuild()
+    assert links._relay_platform == {RELAY_ONLY, OTHER_PLATFORM}
+    assert links._relay_platform_ok is True
+    assert _handles(links, RELAY_ONLY) == set()
+    assert _handles(links, OTHER_PLATFORM) == set()
+    assert _handles(links, user_change) == {("ravennifty", "cospend")}
+
+    mode["kind"] = "empty"
+    links.rebuild()
+    assert links._relay_platform == set()
+    assert links._relay_platform_ok is True
+
+    mode["kind"] = "bad"
+    links.rebuild()
+    assert links._relay_platform == set()
+    mode["kind"] = "missing"
+    links.rebuild()
+    assert links._relay_platform == set()
+    assert links._relay_platform_ok is True
+    db.close()
+
+
+def test_cold_start_without_relay_list_does_not_label_change(tmp_path: Path):
+    wallet = "XNiftyWallet111111111111111111"
+    payee = "XSeenPayee11111111111111111111"
+    fresh = "XUnknownChange11111111111111111"
+    calls = {"n": 0, "up": False}
+
+    def fetch(url):
+        calls["n"] += 1
+        if not calls["up"] or not url.endswith("/api/launch/platform-addresses"):
+            return None
+        return {"addresses": []}
+
+    db = Database(tmp_path / "norelay.db")
+    links = AddressLinks(db, None, (), "http://relay", fetch_json=fetch)
+    db.conn.execute(
+        "INSERT INTO identities(handle, asset, address, txid) VALUES('ravennifty', 'RN', ?, 'claim')",
+        (wallet,),
+    )
+    _tx(db, "seed", 1, ins=[(wallet, None, ("z", 0))], outs=[_out(payee), _out(wallet)])
+    _change_pair(db, wallet, payee, fresh, "chg", 2)
+    db.commit()
+
+    assert links.labels([fresh, wallet])[wallet][0]["handle"] == "ravennifty"
+    assert _handles(links, fresh) == set()
+    assert links._relay_platform_ok is False
+    assert links._relay_platform == set()
+    gen = links.generation
+    fetches = calls["n"]
+    assert links.ensure_fresh() is False
+    assert links.generation == gen
+    assert calls["n"] > fetches
+    assert _handles(links, fresh) == set()
+
+    calls["up"] = True
+    assert links.ensure_fresh() is True
+    assert links._relay_platform_ok is True
+    assert _handles(links, fresh) == {("ravennifty", "cospend")}
+
+    bare_db = Database(tmp_path / "norel.db")
+    bare = AddressLinks(bare_db, None)
+    assert bare._relay_platform_ok is True
+    bare_db.close()
     db.close()

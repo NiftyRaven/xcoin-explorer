@@ -20,12 +20,16 @@ Only provable links are written. Every row in ``address_links`` names one proof:
               reserve, fee, and escrow stay the payment; only the leftover output is change.
 
 A plain recipient never inherits a handle. Platform addresses (treasury, reserves, fee and
-escrow keys, and every address of a platform handle) never get a user handle.
+escrow keys, the relay's platform list, and every address of a platform handle) never get
+a user handle. Until that relay list has loaded once, a change output gets no handle: it
+might be a platform address this process has not seen yet. A failed relay call keeps the
+previous list.
 
-``address_links`` is a snapshot. It is rebuilt when the indexed chain moves, and on a slow
-timer so wallet-confirmations from the relay are picked up. A mempool transaction is applied
-with the same rules when a page asks about it, so a change address in that tx resolves
-before the tx is in a block.
+``address_links`` is a snapshot. The indexer rebuilds it when new blocks land (only the
+new transactions, when the relay list is already loaded) and in full on a slow timer so
+wallet-confirmations and owner-token paths are picked up. A page read does not walk the
+chain. A mempool transaction is applied with the same rules when a page asks about it, so
+a change address in that tx resolves before the tx is in a block.
 """
 
 from __future__ import annotations
@@ -161,7 +165,12 @@ class AddressLinks:
         self._dirty = True
         self._generation = 0
         self._platform_set: set[str] = set(self.static_platform)
-        self._lock = threading.Lock()
+        # Last platform list the relay actually returned. Independent of _platform_set
+        # so a failed or skipped fetch cannot replace it with a smaller set.
+        self._relay_platform: set[str] = set()
+        # No relay configured: there is no list to wait for, and change labels are allowed.
+        self._relay_platform_ok = not bool(self.relay_url)
+        self._lock = threading.RLock()
         self._block_reads = MAX_BLOCK_READS
         self.db.conn.executescript(LINKS_SCHEMA)
         self.db.commit()
@@ -190,21 +199,38 @@ class AddressLinks:
         self.db.conn.execute("DELETE FROM wallet_links")
         self.db.conn.executemany("INSERT OR IGNORE INTO wallet_links(address, handle, at) VALUES(?,?,?)", rows)
 
-    def _platform(self, *, relay: bool = True) -> set[str]:
+    def _refresh_relay_platform(self) -> bool:
+        """Load ``/api/launch/platform-addresses``. Failure keeps the previous list.
+
+        A body of ``{"addresses": [...]}`` is success, including an empty list (that
+        list is the source of truth). ``None``, a non-object, or a missing / non-list
+        ``addresses`` field is failure and does not change what was saved.
+        """
+        if not self.relay_url:
+            self._relay_platform_ok = True
+            return True
+        data = self._relay("/api/launch/platform-addresses")
+        if not isinstance(data, dict) or not isinstance(data.get("addresses"), list):
+            return False
+        self._relay_platform = {str(a) for a in data["addresses"] if str(a).startswith("X")}
+        self._relay_platform_ok = True
+        return True
+
+    def _platform(self) -> set[str]:
+        """Static proceeds, the last good relay list, and platform rows in the index.
+
+        Does not call the relay. Call ``_refresh_relay_platform`` first when a fresh
+        list is wanted.
+        """
         out = set(self.static_platform)
+        out |= set(self._relay_platform)
         for table in ("launch_reserves", "launch_fee_addresses"):
             out |= {r["address"] for r in self.db.conn.execute(f"SELECT address FROM {table}").fetchall()}
         for r in self.db.conn.execute("SELECT handle, address FROM identities WHERE address IS NOT NULL").fetchall():
-            if _norm(r["handle"]) in PLATFORM_HANDLES:
+            if _norm(r["handle"]) in PLATFORM_HANDLES and r["address"]:
                 out.add(r["address"])
-        if relay:
-            data = self._relay("/api/launch/platform-addresses")
-            if isinstance(data, dict):
-                out |= {str(a) for a in data.get("addresses") or [] if str(a).startswith("X")}
-        else:
-            # A page read must not call the relay. Keep addresses learned last time.
-            out |= self._platform_set
         out.discard(None)
+        out.discard("")
         return out
 
     def remember_block(self, txs: Iterable[dict]) -> None:
@@ -240,7 +266,7 @@ class AddressLinks:
     # ---------- build ----------
 
     def invalidate(self) -> None:
-        """The index moved. The next read rebuilds instead of waiting out the timer."""
+        """The index was rewritten at a height already built. The indexer does a full rebuild."""
         with self._lock:
             self._dirty = True
 
@@ -258,38 +284,75 @@ class AddressLinks:
         return self.db.indexed_height() != built
 
     def ensure_fresh(self) -> bool:
-        """Rebuild from the chain when a block has landed since the last build.
+        """Make sure one snapshot exists and the relay platform list has loaded.
 
-        Wallet-link polling stays on the indexer timer. A page read does not
-        call the relay.
+        A page does not rescan the chain when the tip moves. That work belongs to
+        the indexer. The first build, and the first build after the relay list
+        finally loads, still walk the chain so change labels can use the list.
+        While the list has never loaded and a snapshot is already stored, only
+        the relay call is retried.
         """
-        if not self.stale():
+        if self._built_height >= -1 and self._relay_platform_ok:
             return False
+        if self._built_height >= -1:
+            if not self._refresh_relay_platform():
+                return False
+            self.rebuild(sync_wallets=False, force=True)
+            return True
         self.rebuild(sync_wallets=False)
         return True
 
     def maybe_refresh(self, indexed_height: int, now: float | None = None) -> bool:
-        now = time.time() if now is None else now
-        if not self.stale() and indexed_height == self._built_height and now - self._built_at < REFRESH_SECONDS:
-            return False
-        self.rebuild(sync_wallets=True)
-        return True
+        return self.refresh_index(indexed_height, now)
 
-    def rebuild(self, *, sync_wallets: bool = True) -> dict:
+    def refresh_index(self, indexed_height: int, now: float | None = None) -> bool:
+        """Indexer thread. Full rebuild, or only the transactions above the last build.
+
+        Full rebuild when there is no snapshot yet, the relay platform list has
+        never loaded, the chain rewound, the slow timer is due (wallet links and
+        owner-token paths), or the same height was rewritten. Otherwise the new
+        block's change and co-spend inputs are absorbed without walking history.
+        """
+        now = time.time() if now is None else now
+        with self._lock:
+            built = self._built_height
+            dirty = self._dirty
+            built_at = self._built_at
+            ok = self._relay_platform_ok
+        full = (
+            built < -1
+            or not ok
+            or indexed_height < built
+            or now - built_at >= REFRESH_SECONDS
+            or (dirty and indexed_height <= built)
+        )
+        if full:
+            self.rebuild(sync_wallets=True)
+            return True
+        if indexed_height > built:
+            self._absorb_new(built)
+            return True
+        return False
+
+    def rebuild(self, *, sync_wallets: bool = True, force: bool = False) -> dict:
         with self._lock:
             height = self.db.indexed_height()
             if (
-                not sync_wallets
+                not force
+                and not sync_wallets
                 and not self._dirty
                 and self._built_height >= -1
                 and height == self._built_height
+                and self._relay_platform_ok
             ):
                 return {"links": 0, "skipped": True}
             self._block_reads = MAX_BLOCK_READS
             self._ctx = None
             if sync_wallets:
                 self._sync_wallet_links()
-            platform = self._platform(relay=sync_wallets)
+            # Always try. A failure leaves _relay_platform as it was.
+            self._refresh_relay_platform()
+            platform = self._platform()
             links: dict[tuple[str, str, str], tuple[str, str | None]] = {}
 
             def add(addr, handle, proof, detail, txid=None):
@@ -335,6 +398,108 @@ class AddressLinks:
             self._generation += 1
             counts = Counter(p for (_a, _h, p) in links)
             return {"links": len(links), **counts, "clusters_dropped": cospend}
+
+    def _absorb_new(self, after_height: int) -> dict:
+        """Change and co-spend labels for transactions above ``after_height``.
+
+        Does not reset ``_built_at``: the slow timer still owes a full rebuild
+        for owner-token paths and wallet-link polling.
+        """
+        with self._lock:
+            platform = self._platform()
+            platform |= set(self._platform_set)
+            by_addr: dict[str, set[str]] = defaultdict(set)
+            for row in self.db.conn.execute("SELECT address, handle FROM address_links").fetchall():
+                if row["address"] and row["handle"]:
+                    by_addr[row["address"]].add(row["handle"])
+                    if row["handle"] in PLATFORM_HANDLES:
+                        platform.add(row["address"])
+
+            rows = self.db.conn.execute(
+                """
+                SELECT t.txid AS txid, x.direction AS direction, x.n AS n, x.address AS address,
+                       x.value AS value, x.asset AS asset, x.asset_amount AS asset_amount,
+                       x.asset_kind AS asset_kind, x.op_return AS op_return
+                FROM txs t
+                JOIN txio x ON x.txid = t.txid
+                WHERE IFNULL(t.coinbase, 0) = 0 AND t.height > ?
+                ORDER BY t.height, t.n, CASE x.direction WHEN 'in' THEN 0 ELSE 1 END, x.n
+                """,
+                (after_height,),
+            ).fetchall()
+            order: list[str] = []
+            grouped: dict[str, dict] = {}
+            out_addrs: list[str] = []
+            for r in rows:
+                tx = grouped.get(r["txid"])
+                if tx is None:
+                    tx = {"txid": r["txid"], "vin": [], "vout": []}
+                    grouped[r["txid"]] = tx
+                    order.append(r["txid"])
+                leg = {
+                    "address": r["address"],
+                    "value": int(r["value"] or 0),
+                    "asset": r["asset"],
+                    "asset_amount": int(r["asset_amount"] or 0),
+                    "asset_kind": r["asset_kind"],
+                    "op_return": r["op_return"],
+                    "n": r["n"],
+                }
+                tx["vin" if r["direction"] == "in" else "vout"].append(leg)
+                if r["direction"] == "out" and r["address"]:
+                    out_addrs.append(r["address"])
+
+            seen: set[str] = set()
+            if after_height >= 0 and out_addrs:
+                wanted = list(dict.fromkeys(out_addrs))
+                for i in range(0, len(wanted), MAX_BATCH):
+                    chunk = wanted[i : i + MAX_BATCH]
+                    marks = ",".join("?" * len(chunk))
+                    for row in self.db.conn.execute(
+                        f"""
+                        SELECT DISTINCT x.address AS address
+                        FROM txio x JOIN txs t ON t.txid = x.txid
+                        WHERE t.height <= ? AND x.address IN ({marks})
+                        """,
+                        (after_height, *chunk),
+                    ).fetchall():
+                        if row["address"]:
+                            seen.add(row["address"])
+
+            sighash = {
+                r["txid"]: bool(r["all_sighash_all"])
+                for r in self.db.conn.execute("SELECT txid, all_sighash_all FROM tx_sighash").fetchall()
+            }
+            new: list[tuple] = []
+
+            def add(addr, handle, proof, detail, txid=None):
+                handle = _norm(handle)
+                if not addr or not handle:
+                    return
+                if addr in platform and handle not in PLATFORM_HANDLES and proof != "claim":
+                    return
+                if handle in by_addr.get(addr, ()):
+                    return
+                by_addr.setdefault(addr, set()).add(handle)
+                new.append((addr, handle, proof, detail, txid))
+
+            ctx = self._trade_context()
+            for txid in order:
+                self._attribute_tx(
+                    grouped[txid], by_addr, platform, seen, add, sighash.get(txid), ctx, link_inputs=True
+                )
+            if new:
+                self.db.conn.executemany(
+                    "INSERT OR IGNORE INTO address_links(address, handle, proof, detail, txid) VALUES(?,?,?,?,?)",
+                    new,
+                )
+            self.db.commit()
+            self._platform_set |= platform
+            self._dirty = False
+            self._built_height = self.db.indexed_height()
+            self._generation += 1
+            self._ctx = None
+            return {"links": len(new)}
 
     def _owner_paths(self, claimed: dict[str, str], add) -> None:
         """Follow each claimed owner token from its creation, in chain order."""
@@ -606,6 +771,8 @@ class AddressLinks:
 
     def _link_plain_change(self, tx, handle, user_ins, by_addr, platform, seen, add) -> None:
         """The one new output is change when every other payment is already known."""
+        if not self._relay_platform_ok:
+            return
         inputs = set(user_ins)
         fresh: list[str] = []
         explicit = False
@@ -630,6 +797,8 @@ class AddressLinks:
 
     def _link_trade_change(self, tx, handle, by_addr, platform, seen, add, ctx) -> None:
         """Change on a Launch fill. Reserve, fee, and escrow stay unlabeled."""
+        if not self._relay_platform_ok:
+            return
         from explorer.trades import classify_launch_trade
 
         proceeds = tuple(self.static_platform) if self.static_platform else None
@@ -690,7 +859,8 @@ class AddressLinks:
             ]
             by_addr = self._load_handles(addrs)
             seen = self._seen_in_index([row.get("address") for row in tx.get("vout") or [] if isinstance(row, dict)])
-            platform = set(self._platform_set)
+            platform = self._platform()
+            platform |= set(self._platform_set)
             new: list[tuple] = []
 
             def add(addr, handle, proof, detail, txid=None):

@@ -184,9 +184,10 @@ class Indexer:
         self.status["error"] = ""
         self.status["indexing"] = self.status["indexed"] < tip
         self._backfill_today_fill_scripts()
-        if self.links is not None and not self.status["indexing"]:
+        # Every tick, including catch-up. Pages read the snapshot; they do not rebuild it.
+        if self.links is not None:
             try:
-                self.links.maybe_refresh(self.status["indexed"])
+                self.links.refresh_index(self.status["indexed"])
             except Exception as e:
                 self.db.rollback()
                 self.status["links_error"] = str(e)[:200]
