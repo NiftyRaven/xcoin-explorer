@@ -266,6 +266,22 @@ td .id-line { max-width: min(100%, 260px); }
   border-radius: 6px;
   vertical-align: middle;
   margin-right: 8px;
+  background: #000;
+}
+video.asset-thumb { pointer-events: none; }
+.thumb-fallback {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  margin-right: 8px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
 }
 .click-rows tr[data-href] { cursor: pointer; }
 
