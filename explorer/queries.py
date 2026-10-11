@@ -162,6 +162,25 @@ class Queries:
                 "SELECT node_id FROM lottery_active WHERE height=?", (block["height"],)
             ).fetchall()
         ]
+        if txs:
+            ids = [t["txid"] for t in txs if t.get("txid")]
+            grouped: dict[str, list[str]] = {}
+            for i in range(0, len(ids), 400):
+                chunk = ids[i : i + 400]
+                marks = ",".join("?" * len(chunk))
+                for r in self.db.conn.execute(
+                    f"""
+                    SELECT txid, address FROM txio
+                    WHERE txid IN ({marks}) AND address IS NOT NULL
+                    ORDER BY direction, n
+                    """,
+                    chunk,
+                ).fetchall():
+                    bucket = grouped.setdefault(r["txid"], [])
+                    if r["address"] not in bucket:
+                        bucket.append(r["address"])
+            for t in txs:
+                t["addresses"] = grouped.get(t["txid"], [])
         block["txs"] = txs
         block["lottery"] = {
             "winners": wins,
