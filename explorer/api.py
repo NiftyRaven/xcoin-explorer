@@ -20,11 +20,11 @@ from explorer.chain import (
     TICKER,
 )
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
-from explorer.links import MAX_BATCH, AddressLinks, addresses_in
+from explorer.links import MAX_BATCH, AddressLinks, addresses_in, tx_sighash_all
 from explorer.queries import Queries, norm_handle, page_offset, paginate
 from explorer.statcache import StaleWhileRefreshCache
 from explorer.supply import CACHE_SECONDS, SupplyCache
-from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, TradeFeed
+from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, TradeFeed, tx_view_from_rpc
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 
@@ -100,6 +100,9 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
     if links is None:
         links = AddressLinks(queries.db, rpc, DEFAULT_LAUNCH_PROCEEDS if launch_proceeds is None else launch_proceeds)
     app.state.links = links
+    app.state.trades.links = links
+    if indexer is not None and getattr(indexer, "links", None) is not links:
+        indexer.links = links
 
     def labeled(data: dict, extra: tuple[str, ...] = ()) -> dict:
         """Attach ``labels``: address -> X handles with their proof, for every address in the reply."""
@@ -174,7 +177,7 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         b = queries.block(key)
         if not b:
             return JSONResponse({"error": "block not found"}, status_code=404)
-        return b
+        return labeled(b)
 
     @app.get("/api/tx/{txid}")
     def tx(txid: str):
@@ -182,7 +185,13 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         if not t and rpc.connected:
             raw = rpc.try_call("getrawtransaction", txid, True, default=None)
             if raw:
-                return {"unindexed": True, "rpc": raw}
+                view = tx_view_from_rpc(raw, queries.db)
+                payload: dict = {"unindexed": True, "rpc": raw}
+                if view is not None:
+                    view["sighash_all"] = tx_sighash_all(raw)
+                    links.observe_tx(view)
+                    payload["parties"] = _party_addresses(view)
+                return labeled(payload)
         if not t:
             return JSONResponse({"error": "transaction not found"}, status_code=404)
         return labeled(t)
@@ -357,7 +366,7 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         wanted = [a.strip() for a in addrs.split(",") if a.strip()][:MAX_BATCH]
         return JSONResponse(
             {"labels": links.labels(wanted)},
-            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60"},
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
         )
 
     @app.get("/api/trades")
@@ -401,17 +410,24 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         for txid in ids[:50]:
             raw = rpc.try_call("getrawtransaction", txid, True, default=None)
             if raw:
+                view = tx_view_from_rpc(raw, queries.db)
+                parties: list[str] = []
+                if view is not None:
+                    view["sighash_all"] = tx_sighash_all(raw)
+                    links.observe_tx(view)
+                    parties = _party_addresses(view)
                 txs.append(
                     {
                         "txid": txid,
                         "size": raw.get("size"),
                         "vin": len(raw.get("vin") or []),
                         "vout": len(raw.get("vout") or []),
+                        "addresses": parties,
                     }
                 )
             else:
-                txs.append({"txid": txid})
-        return {"connected": True, "info": info, "txs": txs, "count": len(ids)}
+                txs.append({"txid": txid, "addresses": []})
+        return labeled({"connected": True, "info": info, "txs": txs, "count": len(ids)})
 
     @app.get("/api/peers")
     def peers():
@@ -453,6 +469,15 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         route.dependant.call = _release_db_after(queries.db, call)
 
     return app
+
+
+def _party_addresses(tx: dict) -> list[str]:
+    found: list[str] = []
+    for row in list(tx.get("vin") or []) + list(tx.get("vout") or []):
+        addr = row.get("address") if isinstance(row, dict) else None
+        if isinstance(addr, str) and addr.startswith("X") and addr not in found:
+            found.append(addr)
+    return found
 
 
 def _stats_pulse(pulse) -> int:

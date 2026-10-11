@@ -41,6 +41,7 @@ from zoneinfo import ZoneInfo
 from explorer.amounts import format_xfer, xfer_to_atoms
 from explorer.chain import COIN, classify_asset_name
 from explorer.decode import parse_vout_script
+from explorer.links import tx_sighash_all
 from explorer.queries import norm_handle
 
 # 12:00 AM America/New_York. zoneinfo applies EST/EDT, including the
@@ -1037,6 +1038,10 @@ class TradeFeed:
         self._day_key: str | None = None
         self._day_trades: list[dict] = []
         self._day_built: float = 0.0
+        self._day_gen: int = -1
+        # Set by the app to the shared AddressLinks resolver. None in unit tests
+        # that classify without a database of handles.
+        self.links = None
         # Assets whose reserve was already sought and not found. Skips another
         # op_return scan and another round of block fetches on the next page.
         self._reserve_misses: set[str] = set()
@@ -1068,10 +1073,27 @@ class TradeFeed:
             pass
         return int(self.db.indexed_height())
 
+    def _link_generation(self) -> int:
+        links = getattr(self, "links", None)
+        if links is None:
+            return 0
+        return int(getattr(links, "generation", 0) or 0)
+
+    def _links_stale(self) -> bool:
+        links = getattr(self, "links", None)
+        if links is None:
+            return False
+        return bool(links.stale())
+
     def _handles(self, addresses: list[str]) -> dict[str, str]:
+        """Trader address -> handle, using the same resolver as the address page."""
         addrs = [a for a in addresses if a]
         if not addrs:
             return {}
+        links = getattr(self, "links", None)
+        if links is not None:
+            found = links.labels(addrs)
+            return {addr: rows[0]["handle"] for addr, rows in found.items() if rows}
         marks = ",".join("?" * len(addrs))
         rows = self.db.conn.execute(
             f"SELECT address, handle FROM identities WHERE address IN ({marks})",
@@ -1089,6 +1111,16 @@ class TradeFeed:
         name = norm_handle(handle)
         if not name:
             return set()
+        links = getattr(self, "links", None)
+        if links is not None:
+            links.ensure_fresh()
+            rows = self.db.conn.execute(
+                "SELECT address FROM address_links WHERE handle=?",
+                (name,),
+            ).fetchall()
+            found = {row["address"] for row in rows if row["address"]}
+            if found:
+                return found
         rows = self.db.conn.execute(
             "SELECT address FROM identities WHERE handle=?",
             (name,),
@@ -1124,6 +1156,11 @@ class TradeFeed:
             n_i = int(n) if n is not None else None
         except (TypeError, ValueError):
             n_i = None
+        parties: list[str] = []
+        for row in list(tx.get("vin") or []) + list(tx.get("vout") or []):
+            addr = row.get("address") if isinstance(row, dict) else None
+            if addr and addr not in parties:
+                parties.append(addr)
         record = dict(base)
         record.update(
             {
@@ -1132,6 +1169,7 @@ class TradeFeed:
                 "n": n_i,
                 "time": when_i,
                 "trader_handle": handle or None,
+                "parties": parties,
                 "confirmations": confirmations,
                 "confirmed": confirmed,
                 "sentence": describe_trade(
@@ -1214,9 +1252,17 @@ class TradeFeed:
         if not isinstance(ids, list):
             return []
         key = tuple(str(i) for i in ids)
+        gen = self._link_generation()
+        stale = self._links_stale()
         with self._lock:
             cached = self._mem
-            if cached and cached[1] == key and clock - cached[0] < self.cache_seconds:
+            if (
+                cached
+                and not stale
+                and cached[1] == key
+                and cached[3] == gen
+                and clock - cached[0] < self.cache_seconds
+            ):
                 return list(cached[2])
         trades: list[dict] = []
         # Cap the lookup so a busy mempool does not become one RPC per tx forever.
@@ -1227,6 +1273,9 @@ class TradeFeed:
                 continue
             if not view.get("time"):
                 view["time"] = int(time.time())
+            view["sighash_all"] = tx_sighash_all(raw if isinstance(raw, dict) else None)
+            if self.links is not None:
+                self.links.observe_tx(view)
             base = classify_launch_trade(
                 view,
                 self.proceeds,
@@ -1238,7 +1287,7 @@ class TradeFeed:
                 continue
             trades.append(self._decorate(base, view, self._handles([base["trader"]])))
         with self._lock:
-            self._mem = (clock, key, trades)
+            self._mem = (clock, key, trades, self._link_generation())
         return trades
 
     def _begin_day(self, now: int) -> tuple[int, int, str]:
@@ -1667,16 +1716,26 @@ class TradeFeed:
     def today_confirmed(self, now: int) -> list[dict]:
         start, end, key = self._begin_day(now)
         mono = time.monotonic()
+        stale = self._links_stale()
+        gen = self._link_generation()
         with self._lock:
-            if self._day_key == key and self._day_built and mono - self._day_built < self.cache_seconds:
+            if (
+                not stale
+                and self._day_key == key
+                and self._day_built
+                and self._day_gen == gen
+                and mono - self._day_built < self.cache_seconds
+            ):
                 return list(self._day_trades)
         trades = self._trades_between(start, end)
+        gen = self._link_generation()
         with self._lock:
             if self._day_key != key:
                 # Midnight passed while the chain was being read. Don't keep the old day.
                 return []
             self._day_trades = trades
             self._day_built = time.monotonic()
+            self._day_gen = gen
         return list(trades)
 
     def _pending_today(self, now: int, start: int, end: int) -> list[dict]:

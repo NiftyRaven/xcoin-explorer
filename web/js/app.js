@@ -462,7 +462,14 @@ function tipKey(tip) {
 
 function livePagesNeedReload() {
   const h = location.hash || "#/";
-  return h === "#/" || h === "#/lottery" || (h.startsWith("#/members") && document.activeElement?.id !== "member-q");
+  const typing = document.activeElement && /^(member-q|trade-q|asset-q)$/.test(document.activeElement.id || "");
+  if (typing) return false;
+  if (h === "#/" || h === "#/lottery" || h.startsWith("#/members")) return true;
+  // These pages show addresses. A new block has to refetch handles, or a
+  // change address keeps the blank chip from the previous response.
+  return h.startsWith("#/tx/") || h.startsWith("#/block/") || h.startsWith("#/address/")
+    || h.startsWith("#/trades") || h.startsWith("#/mempool") || h.startsWith("#/asset/")
+    || h.startsWith("#/rich");
 }
 
 async function pollTipAndMaybeReload() {
@@ -496,6 +503,7 @@ async function pollTipAndMaybeReload() {
     if (key !== lastTipKey || caughtUp) {
       lastTipKey = key;
       lastIndexing = tip.indexing;
+      LABELS.clear();
       await refreshStatus();
       if (livePagesNeedReload()) await route();
       return;
@@ -991,14 +999,15 @@ async function pageBlock(key) {
       <h2>Payments in this block</h2>
       <p class="muted">Open a transaction to read who sent what.</p>
       <table>
-        <thead><tr><th>#</th><th>Transaction</th><th>What</th><th>XFER out</th></tr></thead>
+        <thead><tr><th>#</th><th>Transaction</th><th>Addresses</th><th>What</th><th>XFER out</th></tr></thead>
         <tbody>
           ${(b.txs || []).map((t) => `<tr>
             <td>${t.n}</td>
             <td>${linkTx(t.txid)}</td>
+            <td>${(t.addresses || []).map((a) => linkAddr(a)).join("<br>") || `<span class="faint">—</span>`}</td>
             <td>${t.coinbase ? `<span class="badge lottery">Block reward</span>` : ""}${t.identity ? ` <span class="badge asset">${handle(t.xid_handle)}</span>` : ""}${!t.coinbase && !t.identity ? `<span class="faint">—</span>` : ""}</td>
             <td>${atomsToXfer(t.xfer_out)}</td>
-          </tr>`).join("") || `<tr><td colspan="4" class="empty">No transactions in this block.</td></tr>`}
+          </tr>`).join("") || `<tr><td colspan="5" class="empty">No transactions in this block.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1470,8 +1479,8 @@ async function pageAsset(name) {
         <h2>History</h2>
         <p class="muted">Open a transaction to see who sent this asset.</p>
         <table>
-          <thead><tr><th>Block</th><th>What</th><th>Transaction</th></tr></thead>
-          <tbody>${(activityPage.items || []).map((x) => `<tr><td>${x.height != null ? linkBlock(x.height) : "—"}</td><td>${activityWords(x.kind)}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No activity.</td></tr>`}</tbody>
+        <thead><tr><th>Block</th><th>What</th><th>Address</th><th>Transaction</th></tr></thead>
+        <tbody>${(activityPage.items || []).map((x) => `<tr><td>${x.height != null ? linkBlock(x.height) : "—"}</td><td>${activityWords(x.kind)}</td><td>${linkAddr(x.address)}</td><td>${linkTx(x.txid)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No activity.</td></tr>`}</tbody>
         </table>
         ${pagerHtml("history-pager", activityPage.total || 0, aState, "history")}
       </div>
@@ -1835,9 +1844,9 @@ async function pageMempool() {
     <p class="sub">${summary}</p>
     <div class="card">
       <table>
-        <thead><tr><th>Txid</th><th>Vin</th><th>Vout</th></tr></thead>
+        <thead><tr><th>Txid</th><th>Addresses</th><th>Vin</th><th>Vout</th></tr></thead>
         <tbody>
-          ${(m.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${t.vin ?? "—"}</td><td>${t.vout ?? "—"}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">${offline ? "No node is connected." : "No unconfirmed transactions."}</td></tr>`}
+          ${(m.txs || []).map((t) => `<tr><td>${linkTx(t.txid)}</td><td>${(t.addresses || []).map((a) => linkAddr(a)).join("<br>") || `<span class="faint">—</span>`}</td><td>${t.vin ?? "—"}</td><td>${t.vout ?? "—"}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">${offline ? "No node is connected." : "No unconfirmed transactions."}</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -2055,6 +2064,18 @@ function tradeWho(t) {
   return `${named}${handleChips(addr)}<a class="mono-clip" href="#/address/${encodeURIComponent(addr)}" title="${esc(addr)}">${esc(shown)}</a>`;
 }
 
+function tradeChangeLinks(t) {
+  const want = new Set((LABELS.get(t.trader) || []).map((row) => row.handle));
+  if (t.trader_handle) want.add(t.trader_handle);
+  if (!want.size) return "";
+  const skip = new Set([t.trader, t.counterparty, t.reserve, t.fee_address].filter(Boolean));
+  const extras = (t.parties || []).filter((addr) => {
+    if (!addr || skip.has(addr)) return false;
+    return (LABELS.get(addr) || []).some((row) => want.has(row.handle));
+  });
+  return extras.map((addr) => `<div class="trade-link"><span class="faint">Change</span>${linkAddr(addr)}</div>`).join("");
+}
+
 function tradeAssetLink(name) {
   const full = String(name || "");
   if (!full) return "—";
@@ -2118,6 +2139,7 @@ function tradeCard(t, extra) {
       <div class="trade-link"><span class="faint">Block</span><span class="id-line">${block}</span></div>
       <div class="trade-link"><span class="faint">Asset</span>${linkAsset(t.asset)}</div>
       <div class="trade-link stack"><span class="faint">${whoLabel}</span>${linkAddr(t.trader, { full: true })}</div>
+      ${tradeChangeLinks(t)}
     </div>
   </article>`;
 }

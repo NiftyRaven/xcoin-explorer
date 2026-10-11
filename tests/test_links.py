@@ -1,5 +1,6 @@
 """Address -> X handle links: only provable ones, never a plain recipient."""
 
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -188,3 +189,196 @@ def test_indexed_blocks_fill_the_sighash_cache(tmp_path: Path):
     links = AddressLinks(db, None)
     links.remember_block([{"txid": "c", "vin": [{"scriptSig": {"hex": _sig("01")}}]}])
     assert links._all_sighash_all("c") is True
+
+
+def _op_return_hex(text: str) -> str:
+    payload = text.encode()
+    return (bytes([0x6A, len(payload)]) + payload).hex()
+
+
+def _insert_fresh(db, txid, height, n, when, vins, vouts):
+    db.conn.execute(
+        """
+        INSERT INTO txs(txid, height, n, time, coinbase, vin_count, vout_count)
+        VALUES(?,?,?,?,0,?,?)
+        """,
+        (txid, height, n, when, len(vins), len(vouts)),
+    )
+    for i, (addr, value) in enumerate(vins):
+        db.conn.execute(
+            """
+            INSERT INTO txio(txid, n, direction, address, value, coinbase)
+            VALUES(?,?,?,?,?,0)
+            """,
+            (txid, i, "in", addr, value),
+        )
+    for i, (addr, value, memo) in enumerate(vouts):
+        db.conn.execute(
+            """
+            INSERT INTO txio(txid, n, direction, address, value, op_return, script_type, coinbase)
+            VALUES(?,?,?,?,?,?,?,0)
+            """,
+            (txid, i, "out", addr, value, memo, "nulldata" if memo else "pubkeyhash"),
+        )
+    db.conn.execute(
+        "INSERT OR REPLACE INTO tx_sighash(txid, all_sighash_all) VALUES(?,1)",
+        (txid,),
+    )
+
+
+class _MempoolRpc:
+    connected = True
+
+    def __init__(self, txs):
+        self.txs = txs
+
+    def try_call(self, method, *args, default=None):
+        if method == "getrawmempool":
+            return list(self.txs)
+        if method == "getrawtransaction":
+            return self.txs.get(args[0], default)
+        return default
+
+
+def test_fresh_change_address_shows_on_tx_trades_and_block(tmp_path: Path):
+    """A new change address is labeled from the tx that created it, before the timer.
+
+    The snapshot is rebuilt once for the claim, then the fresh trade is inserted
+    and not rebuilt by the test. Tx, trades, and block pages must still show the
+    handle, and so must a mempool trade that spends the same wallet.
+    """
+    from explorer.chain import COIN
+    from explorer.trades import DEFAULT_LAUNCH_PROCEEDS, LAUNCH_TREASURY
+
+    wallet = "XWalletClaimed111111111111111111"
+    change = "XChangeFresh11111111111111111111"
+    reserve = "XReserveFresh111111111111111111"
+    fresh_in = "XFreshInput1111111111111111111"
+    mem_change = "XMemChange111111111111111111111"
+    mem_reserve = "XMemReserve11111111111111111111"
+    net = 9_910_000_000
+    gross = 100 * COIN
+    platform_fee = 60_000_000
+    buyer_in = gross + COIN
+    change_value = buyer_in - platform_fee - net - COIN
+    memo = f"XL1|B|OTHER/CHILD|{net}|100"
+    now = int(time.time())
+    trade_id = "aa" * 32
+    coin_id = "bb" * 32
+    mem_id = "cc" * 32
+
+    db = Database(tmp_path / "fresh.db")
+    links = AddressLinks(db, None, DEFAULT_LAUNCH_PROCEEDS)
+    db.conn.execute(
+        "INSERT INTO identities(handle, asset, address, txid) VALUES('evil', 'EVIL', ?, 'claim')",
+        (wallet,),
+    )
+    db.conn.execute("INSERT INTO assets(name, kind, units) VALUES('OTHER/CHILD', 'sub', 8)")
+    db.commit()
+    links.rebuild()
+    assert links._built_height == -1
+    assert _handles(links, change) == set()
+
+    _insert_fresh(db, "fund", 2, 0, now, [], [(wallet, buyer_in, None)])
+    _insert_fresh(
+        db,
+        trade_id,
+        4,
+        0,
+        now,
+        [(wallet, buyer_in)],
+        [
+            (LAUNCH_TREASURY, platform_fee, None),
+            (reserve, net, None),
+            (change, change_value, None),
+            (None, 0, memo),
+        ],
+    )
+    _insert_fresh(
+        db,
+        coin_id,
+        4,
+        1,
+        now,
+        [(wallet, 1000), (fresh_in, 1000)],
+        [(wallet, 2000, None)],
+    )
+    db.conn.execute(
+        "INSERT INTO blocks(height, hash, time, tx_count) VALUES(?,?,?,?)",
+        (4, "44" * 32, now, 2),
+    )
+    db.conn.execute(
+        "INSERT INTO utxos(txid, n, address, value, asset, asset_amount, height) VALUES(?,?,?,?,?,?,?)",
+        (trade_id, 2, change, 0, "OTHER/CHILD", 1, 4),
+    )
+    db.conn.execute(
+        "INSERT INTO asset_activity(height, txid, name, kind, amount, address) VALUES(?,?,?,?,?,?)",
+        (4, trade_id, "OTHER/CHILD", "transfer", 1, change),
+    )
+    db.commit()
+    # The fresh tx is in the index and the handle snapshot is still the old one.
+    assert links.stale()
+    assert links._built_height == -1
+
+    raw_mem = {
+        "txid": mem_id,
+        "time": now,
+        "vin": [{"txid": "fund", "vout": 0, "scriptSig": {"hex": _sig("01")}}],
+        "vout": [
+            {"n": 0, "value": platform_fee, "scriptPubKey": {"addresses": [LAUNCH_TREASURY], "type": "pubkeyhash"}},
+            {"n": 1, "value": net, "scriptPubKey": {"addresses": [mem_reserve], "type": "pubkeyhash"}},
+            {"n": 2, "value": change_value, "scriptPubKey": {"addresses": [mem_change], "type": "pubkeyhash"}},
+            {
+                "n": 3,
+                "value": 0,
+                "scriptPubKey": {"hex": _op_return_hex(memo), "type": "nulldata"},
+            },
+        ],
+    }
+    rpc = _MempoolRpc({mem_id: raw_mem})
+    client = TestClient(create_app(Queries(db), Indexer(db, rpc), rpc, links=links))
+
+    def handle_of(payload, addr):
+        rows = (payload.get("labels") or {}).get(addr) or []
+        return rows[0]["handle"] if rows else None
+
+    tx = client.get(f"/api/tx/{trade_id}").json()
+    assert handle_of(tx, change) == "evil"
+    assert handle_of(tx, wallet) == "evil"
+    assert handle_of(tx, reserve) is None
+    assert handle_of(tx, LAUNCH_TREASURY) is None
+
+    block = client.get("/api/block/4").json()
+    assert handle_of(block, change) == "evil"
+    assert handle_of(block, fresh_in) == "evil"
+    assert change in block["txs"][0]["addresses"]
+    assert handle_of(block, reserve) is None
+    assert handle_of(block, LAUNCH_TREASURY) is None
+
+    trades = client.get("/api/trades").json()
+    assert handle_of(trades, change) == "evil"
+    assert handle_of(trades, mem_change) == "evil"
+    assert any(item["trader"] == wallet and item["trader_handle"] == "evil" for item in trades["items"])
+    assert handle_of(trades, reserve) is None
+    assert handle_of(trades, mem_reserve) is None
+    assert handle_of(trades, LAUNCH_TREASURY) is None
+
+    addr = client.get(f"/api/address/{change}").json()
+    assert handle_of(addr, change) == "evil"
+    coin = client.get(f"/api/tx/{coin_id}").json()
+    assert handle_of(coin, fresh_in) == "evil"
+
+    mem_tx = client.get(f"/api/tx/{mem_id}").json()
+    assert mem_tx["unindexed"] is True
+    assert handle_of(mem_tx, mem_change) == "evil"
+    assert handle_of(mem_tx, mem_reserve) is None
+
+    pool = client.get("/api/mempool").json()
+    assert handle_of(pool, mem_change) == "evil"
+    assert mem_change in pool["txs"][0]["addresses"]
+
+    holders = client.get("/api/asset-holders/OTHER/CHILD").json()
+    assert handle_of(holders, change) == "evil"
+    activity = client.get("/api/asset-activity/OTHER/CHILD").json()
+    assert handle_of(activity, change) == "evil"
+    db.close()

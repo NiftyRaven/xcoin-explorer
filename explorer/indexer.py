@@ -178,6 +178,8 @@ class Indexer:
                     break
                 self._index_height(height, network)
             self.db.commit()
+            if self.links is not None:
+                self.links.invalidate()
         self.status["indexed"] = self.db.indexed_height()
         self.status["error"] = ""
         self.status["indexing"] = self.status["indexed"] < tip

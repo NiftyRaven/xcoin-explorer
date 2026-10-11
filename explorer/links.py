@@ -14,10 +14,18 @@ Only provable links are written. Every row in ``address_links`` names one proof:
               the proofs above (common-input ownership). Only single-party transactions count:
               every input signed SIGHASH_ALL, no Launch memo (``XL1``/``XB1``), no input from a
               Launch platform address, and no equal-output mixing shape. A cluster that touches
-              two different handles gets no ``cospend`` labels at all.
+              two different handles gets no ``cospend`` labels at all. The same proof is used for
+              a new change output of that wallet: the leftover address when the payment went to
+              an address already on chain or to a platform address. On a Launch trade the
+              reserve, fee, and escrow stay the payment; only the leftover output is change.
 
 A plain recipient never inherits a handle. Platform addresses (treasury, reserves, fee and
 escrow keys, and every address of a platform handle) never get a user handle.
+
+``address_links`` is a snapshot. It is rebuilt when the indexed chain moves, and on a slow
+timer so wallet-confirmations from the relay are picked up. A mempool transaction is applied
+with the same rules when a page asks about it, so a change address in that tx resolves
+before the tx is in a block.
 """
 
 from __future__ import annotations
@@ -90,6 +98,31 @@ def sighash_flags(script_sig_hex: str | None) -> str | None:
     return f"{sig[-1]:02x}" if sig else None
 
 
+def _is_launch_memo(value: str | None) -> bool:
+    """True for an ``XL1`` / ``XB1`` payload stored as text or as hex."""
+    memo = (value or "").strip().lower()
+    if not memo:
+        return False
+    if memo.startswith(LAUNCH_MEMO_PREFIXES) or memo.startswith(("xl1|", "xb1|")):
+        return True
+    return False
+
+
+def tx_sighash_all(raw: dict | None) -> bool | None:
+    """True when every input of a verbose tx signs SIGHASH_ALL. None if a signature is missing."""
+    vins = raw.get("vin") if isinstance(raw, dict) else None
+    if not vins or any(isinstance(v, dict) and "coinbase" in v for v in vins):
+        return None
+    flags: list[str | None] = []
+    for vin in vins:
+        if not isinstance(vin, dict):
+            return None
+        flags.append(sighash_flags((vin.get("scriptSig") or {}).get("hex")))
+    if any(flag is None for flag in flags):
+        return None
+    return all(flag == SIGHASH_ALL for flag in flags)
+
+
 class _UnionFind:
     def __init__(self):
         self.parent: dict[str, str] = {}
@@ -125,6 +158,9 @@ class AddressLinks:
         self._fetch = fetch_json or _http_json
         self._built_height = -2
         self._built_at = 0.0
+        self._dirty = True
+        self._generation = 0
+        self._platform_set: set[str] = set(self.static_platform)
         self._lock = threading.Lock()
         self._block_reads = MAX_BLOCK_READS
         self.db.conn.executescript(LINKS_SCHEMA)
@@ -154,16 +190,20 @@ class AddressLinks:
         self.db.conn.execute("DELETE FROM wallet_links")
         self.db.conn.executemany("INSERT OR IGNORE INTO wallet_links(address, handle, at) VALUES(?,?,?)", rows)
 
-    def _platform(self) -> set[str]:
+    def _platform(self, *, relay: bool = True) -> set[str]:
         out = set(self.static_platform)
         for table in ("launch_reserves", "launch_fee_addresses"):
             out |= {r["address"] for r in self.db.conn.execute(f"SELECT address FROM {table}").fetchall()}
         for r in self.db.conn.execute("SELECT handle, address FROM identities WHERE address IS NOT NULL").fetchall():
             if _norm(r["handle"]) in PLATFORM_HANDLES:
                 out.add(r["address"])
-        data = self._relay("/api/launch/platform-addresses")
-        if isinstance(data, dict):
-            out |= {str(a) for a in data.get("addresses") or [] if str(a).startswith("X")}
+        if relay:
+            data = self._relay("/api/launch/platform-addresses")
+            if isinstance(data, dict):
+                out |= {str(a) for a in data.get("addresses") or [] if str(a).startswith("X")}
+        else:
+            # A page read must not call the relay. Keep addresses learned last time.
+            out |= self._platform_set
         out.discard(None)
         return out
 
@@ -199,20 +239,57 @@ class AddressLinks:
 
     # ---------- build ----------
 
-    def maybe_refresh(self, indexed_height: int, now: float | None = None) -> bool:
-        now = time.time() if now is None else now
-        if indexed_height == self._built_height and now - self._built_at < REFRESH_SECONDS:
+    def invalidate(self) -> None:
+        """The index moved. The next read rebuilds instead of waiting out the timer."""
+        with self._lock:
+            self._dirty = True
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def stale(self) -> bool:
+        """True when ``address_links`` was built for an older chain, or never built."""
+        with self._lock:
+            dirty = self._dirty
+            built = self._built_height
+        if dirty or built < -1:
+            return True
+        return self.db.indexed_height() != built
+
+    def ensure_fresh(self) -> bool:
+        """Rebuild from the chain when a block has landed since the last build.
+
+        Wallet-link polling stays on the indexer timer. A page read does not
+        call the relay.
+        """
+        if not self.stale():
             return False
-        self.rebuild()
-        self._built_height = indexed_height
-        self._built_at = now
+        self.rebuild(sync_wallets=False)
         return True
 
-    def rebuild(self) -> dict:
+    def maybe_refresh(self, indexed_height: int, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
+        if not self.stale() and indexed_height == self._built_height and now - self._built_at < REFRESH_SECONDS:
+            return False
+        self.rebuild(sync_wallets=True)
+        return True
+
+    def rebuild(self, *, sync_wallets: bool = True) -> dict:
         with self._lock:
+            height = self.db.indexed_height()
+            if (
+                not sync_wallets
+                and not self._dirty
+                and self._built_height >= -1
+                and height == self._built_height
+            ):
+                return {"links": 0, "skipped": True}
             self._block_reads = MAX_BLOCK_READS
-            self._sync_wallet_links()
-            platform = self._platform()
+            self._ctx = None
+            if sync_wallets:
+                self._sync_wallet_links()
+            platform = self._platform(relay=sync_wallets)
             links: dict[tuple[str, str, str], tuple[str, str | None]] = {}
 
             def add(addr, handle, proof, detail, txid=None):
@@ -238,6 +315,11 @@ class AddressLinks:
             for (addr, handle, _p) in list(links):
                 if handle in PLATFORM_HANDLES:
                     platform.add(addr)
+            # Change outputs are anchors for a later spend of that change.
+            # Co-inputs are resolved again afterwards so a fresh address spent
+            # with that change is labeled in the same build.
+            self._cospend(links, platform, add)
+            self._change_outputs(links, platform, add)
             cospend = self._cospend(links, platform, add)
 
             self.db.conn.execute("DELETE FROM address_links")
@@ -246,6 +328,11 @@ class AddressLinks:
                 [(a, h, p, d, t) for (a, h, p), (d, t) in links.items()],
             )
             self.db.commit()
+            self._platform_set = set(platform)
+            self._dirty = False
+            self._built_height = self.db.indexed_height()
+            self._built_at = time.time()
+            self._generation += 1
             counts = Counter(p for (_a, _h, p) in links)
             return {"links": len(links), **counts, "clusters_dropped": cospend}
 
@@ -362,8 +449,7 @@ class AddressLinks:
             "SELECT address, value, op_return FROM txio WHERE txid=? AND direction='out'", (txid,)
         ).fetchall()
         for o in outs:
-            memo = (o["op_return"] or "").lower()
-            if memo.startswith(LAUNCH_MEMO_PREFIXES):
+            if _is_launch_memo(o["op_return"]):
                 return False
         if len(addrs) >= 3:
             values = Counter(o["value"] for o in outs if o["value"] and o["address"])
@@ -371,10 +457,302 @@ class AddressLinks:
                 return False
         return self._all_sighash_all(txid) is True
 
+    # ---------- change outputs, and one mempool tx ----------
+
+    def _handles_of(self, by_addr: dict[str, set[str]], addr: str) -> set[str]:
+        return {h for h in by_addr.get(addr, ()) if h not in PLATFORM_HANDLES}
+
+    def _change_outputs(self, links: dict, platform: set[str], add) -> None:
+        """Leftover outputs of a wallet, in chain order. Does not relabel co-inputs.
+
+        Co-inputs are already decided by ``_cospend`` (including clusters that
+        touch two handles). Doing that again here would put those links back.
+        """
+        by_addr: dict[str, set[str]] = defaultdict(set)
+        for addr, handle, _proof in links:
+            by_addr[addr].add(handle)
+
+        def add_change(addr, handle, proof, detail, txid=None):
+            add(addr, handle, proof, detail, txid)
+            if any(a == addr and h == handle for (a, h, _p) in links):
+                by_addr[addr].add(handle)
+
+        sighash = {
+            r["txid"]: bool(r["all_sighash_all"])
+            for r in self.db.conn.execute("SELECT txid, all_sighash_all FROM tx_sighash").fetchall()
+        }
+        rows = self.db.conn.execute(
+            """
+            SELECT t.txid AS txid, x.direction AS direction, x.n AS n, x.address AS address,
+                   x.value AS value, x.asset AS asset, x.asset_amount AS asset_amount,
+                   x.asset_kind AS asset_kind, x.op_return AS op_return
+            FROM txs t
+            JOIN txio x ON x.txid = t.txid
+            WHERE IFNULL(t.coinbase, 0) = 0
+            ORDER BY t.height, t.n, CASE x.direction WHEN 'in' THEN 0 ELSE 1 END, x.n
+            """
+        ).fetchall()
+        order: list[str] = []
+        grouped: dict[str, dict] = {}
+        for r in rows:
+            tx = grouped.get(r["txid"])
+            if tx is None:
+                tx = {"txid": r["txid"], "vin": [], "vout": []}
+                grouped[r["txid"]] = tx
+                order.append(r["txid"])
+            leg = {
+                "address": r["address"],
+                "value": int(r["value"] or 0),
+                "asset": r["asset"],
+                "asset_amount": int(r["asset_amount"] or 0),
+                "asset_kind": r["asset_kind"],
+                "op_return": r["op_return"],
+                "n": r["n"],
+            }
+            tx["vin" if r["direction"] == "in" else "vout"].append(leg)
+        seen: set[str] = set()
+        ctx = self._trade_context()
+        for txid in order:
+            self._attribute_tx(
+                grouped[txid],
+                by_addr,
+                platform,
+                seen,
+                add_change,
+                sighash.get(txid),
+                ctx,
+                link_inputs=False,
+            )
+
+    def _trade_context(self) -> dict:
+        cached = getattr(self, "_ctx", None)
+        if cached is not None and getattr(self, "_ctx_gen", None) == self._generation:
+            return cached
+        units: dict[str, int] = {}
+        reserves: dict[str, str] = {}
+        fees: list[str] = []
+        for row in self.db.conn.execute("SELECT name, units FROM assets").fetchall():
+            if row["name"] and int(row["units"] or 0) > 0:
+                units[row["name"]] = int(row["units"])
+        for row in self.db.conn.execute("SELECT asset, address FROM launch_reserves").fetchall():
+            if row["asset"] and row["address"]:
+                reserves[row["asset"]] = row["address"]
+        for row in self.db.conn.execute("SELECT address FROM launch_fee_addresses").fetchall():
+            if row["address"]:
+                fees.append(row["address"])
+        ctx = {"units": units, "reserves": reserves, "fees": fees}
+        self._ctx = ctx
+        self._ctx_gen = self._generation
+        return ctx
+
+    def _attribute_tx(
+        self,
+        tx: dict,
+        by_addr: dict[str, set[str]],
+        platform: set[str],
+        seen: set[str],
+        add,
+        sighash_all: bool | None,
+        ctx: dict,
+        *,
+        link_inputs: bool,
+    ) -> None:
+        """One transaction. ``link_inputs`` is for a tx that is not in the snapshot yet."""
+        ins = [row.get("address") for row in tx.get("vin") or [] if row.get("address")]
+        outs = list(tx.get("vout") or [])
+
+        def see():
+            for row in list(tx.get("vin") or []) + outs:
+                addr = row.get("address")
+                if addr:
+                    seen.add(addr)
+
+        if sighash_all is not True or self._is_mixing(ins, outs):
+            see()
+            return
+        user_ins = [addr for addr in ins if addr not in platform]
+        handles: set[str] = set()
+        for addr in user_ins:
+            handles |= self._handles_of(by_addr, addr)
+        if len(handles) != 1:
+            see()
+            return
+        handle = next(iter(handles))
+        memo = any(_is_launch_memo(row.get("op_return")) for row in outs)
+        platform_in = any(addr in platform for addr in ins)
+        if link_inputs and not memo and not platform_in:
+            for addr in user_ins:
+                if self._handles_of(by_addr, addr):
+                    continue
+                add(
+                    addr,
+                    handle,
+                    "cospend",
+                    f"spent in one transaction with other @{handle} addresses",
+                    tx.get("txid"),
+                )
+                by_addr[addr].add(handle)
+        if memo or platform_in:
+            self._link_trade_change(tx, handle, by_addr, platform, seen, add, ctx)
+        else:
+            self._link_plain_change(tx, handle, user_ins, by_addr, platform, seen, add)
+        see()
+
+    def _is_mixing(self, addrs: list[str], outs: list[dict]) -> bool:
+        if len(set(addrs)) < 3:
+            return False
+        values = Counter(int(row.get("value") or 0) for row in outs if row.get("value") and row.get("address"))
+        return bool(values and values.most_common(1)[0][1] >= 3)
+
+    def _link_plain_change(self, tx, handle, user_ins, by_addr, platform, seen, add) -> None:
+        """The one new output is change when every other payment is already known."""
+        inputs = set(user_ins)
+        fresh: list[str] = []
+        explicit = False
+        payment = False
+        for row in tx.get("vout") or []:
+            addr = row.get("address")
+            if not addr:
+                continue
+            if addr in platform:
+                payment = True
+                continue
+            if addr in inputs or handle in self._handles_of(by_addr, addr):
+                explicit = True
+                continue
+            if addr in seen:
+                payment = True
+                continue
+            fresh.append(addr)
+        if explicit or not payment or len(set(fresh)) != 1:
+            return
+        add(fresh[0], handle, "cospend", f"change from a transaction signed by @{handle}", tx.get("txid"))
+
+    def _link_trade_change(self, tx, handle, by_addr, platform, seen, add, ctx) -> None:
+        """Change on a Launch fill. Reserve, fee, and escrow stay unlabeled."""
+        from explorer.trades import classify_launch_trade
+
+        proceeds = tuple(self.static_platform) if self.static_platform else None
+        try:
+            trade = classify_launch_trade(
+                tx,
+                proceeds,
+                asset_units=ctx.get("units"),
+                reserves=ctx.get("reserves"),
+                fee_addresses=ctx.get("fees"),
+            )
+        except Exception:
+            return
+        if not trade:
+            return
+        trader = trade.get("trader") or ""
+        if handle not in self._handles_of(by_addr, trader):
+            return
+        skip = set(platform)
+        skip.add(trader)
+        for key in ("counterparty", "reserve", "fee_address"):
+            if trade.get(key):
+                skip.add(trade[key])
+        fresh: list[str] = []
+        for row in tx.get("vout") or []:
+            addr = row.get("address")
+            if not addr or addr in skip or addr in platform:
+                continue
+            if row.get("asset") or _is_launch_memo(row.get("op_return")) or not row.get("value"):
+                continue
+            theirs = self._handles_of(by_addr, addr)
+            if theirs and handle not in theirs:
+                continue
+            if addr in seen and handle not in theirs:
+                continue
+            fresh.append(addr)
+        uniq = list(dict.fromkeys(fresh))
+        if len(uniq) != 1:
+            return
+        add(uniq[0], handle, "cospend", f"change from a transaction signed by @{handle}", tx.get("txid"))
+
+    def observe_tx(self, tx: dict) -> None:
+        """Apply the same rules to one tx that is not in the snapshot (a mempool tx)."""
+        if not isinstance(tx, dict) or not tx.get("txid"):
+            return
+        self.ensure_fresh()
+        with self._lock:
+            sighash = tx.get("sighash_all")
+            if sighash is None:
+                row = self.db.conn.execute(
+                    "SELECT all_sighash_all FROM tx_sighash WHERE txid=?", (tx["txid"],)
+                ).fetchone()
+                sighash = None if row is None else bool(row["all_sighash_all"])
+            addrs = [
+                row.get("address")
+                for row in list(tx.get("vin") or []) + list(tx.get("vout") or [])
+                if isinstance(row, dict) and row.get("address")
+            ]
+            by_addr = self._load_handles(addrs)
+            seen = self._seen_in_index([row.get("address") for row in tx.get("vout") or [] if isinstance(row, dict)])
+            platform = set(self._platform_set)
+            new: list[tuple] = []
+
+            def add(addr, handle, proof, detail, txid=None):
+                handle = _norm(handle)
+                if not addr or not handle:
+                    return
+                if addr in platform and handle not in PLATFORM_HANDLES and proof != "claim":
+                    return
+                if handle in by_addr.get(addr, ()):
+                    return
+                by_addr.setdefault(addr, set()).add(handle)
+                new.append((addr, handle, proof, detail, txid or tx.get("txid")))
+
+            self._attribute_tx(
+                tx, by_addr, platform, seen, add, sighash, self._trade_context(), link_inputs=True
+            )
+            if not new:
+                return
+            self.db.conn.executemany(
+                "INSERT OR IGNORE INTO address_links(address, handle, proof, detail, txid) VALUES(?,?,?,?,?)",
+                new,
+            )
+            self.db.commit()
+
+    def _load_handles(self, addrs: list[str]) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = defaultdict(set)
+        wanted = [a for a in dict.fromkeys(addrs) if isinstance(a, str) and a.startswith("X")]
+        for i in range(0, len(wanted), MAX_BATCH):
+            chunk = wanted[i : i + MAX_BATCH]
+            marks = ",".join("?" * len(chunk))
+            for row in self.db.conn.execute(
+                f"SELECT address, handle FROM address_links WHERE address IN ({marks})", chunk
+            ).fetchall():
+                out[row["address"]].add(row["handle"])
+        return out
+
+    def _seen_in_index(self, addrs: list[str]) -> set[str]:
+        wanted = [a for a in dict.fromkeys(addrs) if isinstance(a, str) and a.startswith("X")]
+        found: set[str] = set()
+        for i in range(0, len(wanted), MAX_BATCH):
+            chunk = wanted[i : i + MAX_BATCH]
+            marks = ",".join("?" * len(chunk))
+            for row in self.db.conn.execute(
+                f"SELECT DISTINCT address FROM txio WHERE address IN ({marks})", chunk
+            ).fetchall():
+                if row["address"]:
+                    found.add(row["address"])
+        return found
+
     # ---------- reads ----------
 
-    def labels(self, addresses: Iterable[str]) -> dict[str, list[dict]]:
-        """Address -> links, strongest proof first. Unlinked addresses are left out."""
+    def labels(self, addresses: Iterable[str], txs: Iterable[dict] | None = None) -> dict[str, list[dict]]:
+        """Address -> links, strongest proof first. Unlinked addresses are left out.
+
+        ``txs`` are mempool (or otherwise unindexed) transactions. They are
+        resolved with the same rules as a confirmed tx and then stored, so the
+        address page and the tx page agree.
+        """
+        self.ensure_fresh()
+        for tx in txs or ():
+            if isinstance(tx, dict):
+                self.observe_tx(tx)
         addrs = sorted({a for a in addresses if isinstance(a, str) and a.startswith("X")})[: MAX_BATCH * 5]
         out: dict[str, list[dict]] = {}
         for i in range(0, len(addrs), MAX_BATCH):
@@ -404,6 +782,7 @@ def addresses_in(obj, limit: int = 1000) -> set[str]:
     """Every X… address string under ``address``-like keys of a response."""
     found: set[str] = set()
     keys = ("address", "issuer", "host_address", "trader", "creator")
+    lists = ("addresses", "parties")
 
     def walk(o):
         if len(found) >= limit:
@@ -412,6 +791,12 @@ def addresses_in(obj, limit: int = 1000) -> set[str]:
             for k, v in o.items():
                 if k in keys and isinstance(v, str) and v.startswith("X"):
                     found.add(v)
+                elif k in lists and isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, str) and item.startswith("X"):
+                            found.add(item)
+                        elif isinstance(item, (dict, list)):
+                            walk(item)
                 elif isinstance(v, (dict, list)):
                     walk(v)
         elif isinstance(o, list):
