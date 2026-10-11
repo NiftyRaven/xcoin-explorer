@@ -163,30 +163,41 @@ function ipfsContentUrl(cid) {
   return "/api/ipfs/content/" + encodeURIComponent(cid);
 }
 
-function defaultGateways(cid) {
-  return [
-    pinataViewUrl(cid),
-    "https://gateway.pinata.cloud/ipfs/" + cid,
-    "https://dweb.link/ipfs/" + cid,
-    "https://w3s.link/ipfs/" + cid,
-    "https://cloudflare-ipfs.com/ipfs/" + cid,
-    "https://ipfs.io/ipfs/" + cid,
-  ];
+function isAllowedMedia(url) {
+  const t = String(url || "");
+  if (t.startsWith("/api/ipfs/content/")) return true;
+  try {
+    const u = new URL(t);
+    if (u.protocol !== "https:" || u.username || u.password) return false;
+    if (u.hostname === PINATA_VIEW_GATEWAY && u.pathname.indexOf("/ipfs/") === 0) return true;
+    if (u.hostname === "xferchain.net" && u.pathname.indexOf("/api/assets/ipfs/media/") === 0) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function relayMediaUrl(cid, path, name) {
+  const q = [];
+  if (path) q.push("path=" + encodeURIComponent(path));
+  if (name) q.push("name=" + encodeURIComponent(name));
+  return "https://xferchain.net/api/assets/ipfs/media/" + encodeURIComponent(cid) + (q.length ? "?" + q.join("&") : "");
 }
 
 function ipfsSources(cid, extra) {
   const seen = new Set();
   const out = [];
   const add = (u) => {
-    if (!u || seen.has(u)) return;
+    if (!u || seen.has(u) || !isAllowedMedia(u)) return;
     seen.add(u);
     out.push(u);
   };
   add(pinataViewUrl(cid));
   add(ipfsContentUrl(cid));
   (extra || []).forEach(add);
-  defaultGateways(cid).forEach(add);
-  return out;
+  // The local proxy is for an on-chain file only. Do not point an <img> at it:
+  // a video CID would download the whole file and still fail as a picture.
+  return out.filter((u) => u.indexOf("/api/ipfs/content/") !== 0);
 }
 
 function explorerAssetCid(a) {
@@ -198,31 +209,75 @@ function explorerAssetCid(a) {
 function assetListIpfsCell(a) {
   const cid = explorerAssetCid(a);
   if (!cid) return '<span class="faint">—</span>';
-  const srcs = ipfsSources(cid);
   const name = a && a.name ? String(a.name) : "";
+  const srcs = ipfsSources(cid).concat([relayMediaUrl(cid, "", name)]).filter((u, i, all) => u && all.indexOf(u) === i);
   const href = name ? "#/asset/" + encodeURIComponent(name) : ipfsContentUrl(cid);
   return (
     `<a class="asset-ipfs" href="${esc(href)}">` +
-    `<img class="asset-thumb" src="${esc(srcs[0])}" alt="" data-ipfs-json="${esc(cid)}"${fallbackAttr(srcs)} />` +
+    `<img class="asset-thumb" src="${esc(srcs[0])}" alt="" data-ipfs-json="${esc(cid)}" data-asset-name="${esc(name)}"${fallbackAttr(srcs)} />` +
     `<span class="badge ipfs">IPFS</span></a>`
   );
 }
 
+function presentationUrls(info) {
+  const p = info && info.presentation;
+  const urls = p && Array.isArray(p.urls) ? p.urls : [];
+  return urls.filter(isAllowedMedia);
+}
+
+function replaceThumb(img, node) {
+  if (img && img.parentNode) img.parentNode.replaceChild(node, img);
+}
+
 async function resolveThumb(img, cid) {
+  const name = img.getAttribute("data-asset-name") || "";
   try {
-    const info = await api("/ipfs/inspect?cid=" + encodeURIComponent(cid));
-    const media = mediaCidFromInfo(info, cid);
-    if (!media || media === cid) {
-      img.hidden = true;
+    const info = await api("/ipfs/inspect?cid=" + encodeURIComponent(cid) + "&name=" + encodeURIComponent(name));
+    const urls = presentationUrls(info);
+    const kind = (info.presentation && info.presentation.type) || "";
+    if (!urls.length || kind === "none") {
+      replaceThumb(img, thumbPlaceholder(cid));
       return;
     }
-    const urls = ipfsSources(media);
+    if (kind === "video") {
+      replaceThumb(img, thumbVideo(urls));
+      return;
+    }
+    if (kind === "audio") {
+      replaceThumb(img, thumbPlaceholder(cid));
+      return;
+    }
     img.hidden = false;
     img.dataset.fallbacks = JSON.stringify(urls.slice(1));
     img.src = urls[0];
   } catch {
-    img.hidden = true;
+    replaceThumb(img, thumbPlaceholder(cid));
   }
+}
+
+function thumbVideo(urls) {
+  const el = document.createElement("video");
+  el.className = "asset-thumb";
+  el.muted = true;
+  el.defaultMuted = true;
+  el.autoplay = true;
+  el.loop = true;
+  el.playsInline = true;
+  el.setAttribute("muted", "");
+  el.setAttribute("autoplay", "");
+  el.setAttribute("loop", "");
+  el.setAttribute("playsinline", "");
+  el.src = urls[0];
+  if (urls.length > 1) el.dataset.fallbacks = JSON.stringify(urls.slice(1));
+  return el;
+}
+
+function thumbPlaceholder(cid) {
+  const el = document.createElement("span");
+  el.className = "thumb-fallback";
+  el.textContent = "IPFS";
+  if (cid) el.title = cid;
+  return el;
 }
 
 function mediaCidFromInfo(info, jsonCid) {
@@ -380,26 +435,19 @@ document.addEventListener("error", (e) => {
   }
   if (el.classList && el.classList.contains("asset-thumb")) {
     const cid = el.getAttribute("data-ipfs-json") || "";
-    if (cid && !el.dataset.metaTried) {
+    if (cid && el.tagName === "IMG" && !el.dataset.metaTried) {
       el.dataset.metaTried = "1";
       resolveThumb(el, cid);
       return;
     }
-    el.hidden = true;
+    replaceThumb(el, thumbPlaceholder(cid));
     return;
   }
   const stage = el.closest && el.closest("#asset-media");
   if (!stage) return;
-  if (el.tagName === "IMG" && !el.dataset.triedVideo) {
-    const cid = el.getAttribute("alt") || "";
-    const urls = ipfsSources(normalizeIpfsClient(cid) || cid);
-    if (urls.length && normalizeIpfsClient(cid)) {
-      stage.innerHTML = `<div class="media-stage video"><video controls playsinline src="${esc(urls[0])}"${fallbackAttr(urls)}></video></div>`;
-      return;
-    }
-  }
   if (!stage.querySelector(".media-empty")) {
-    stage.innerHTML = `<div class="media-stage">${ipfsUnavailable("This file did not load. Try a link below.")}</div>`;
+    const cid = stage.getAttribute("data-cid") || "";
+    stage.innerHTML = `<div class="media-stage">${ipfsUnavailable("This file did not load.", cid)}</div>`;
   }
 }, true);
 
@@ -1271,18 +1319,33 @@ function renderMetadataCard(info) {
   const name = plainClient(view.name || nft.name || "").trim();
   const description = plainClient(view.description || nft.description || "").trim();
   const external = safeHttpClient(view.external_url || nft.external_url || "");
+  const website = safeHttpClient(view.website_url || nft.website_url || "");
+  const ticker = plainClient(view.ticker || nft.ticker || "").trim();
+  const issuer = plainClient(view.issuer || nft.issuer || "").trim();
   const image = (view.image && typeof view.image === "object") ? view.image : (nft.image || null);
   const attrs = (view.attributes && view.attributes.length) ? view.attributes : (nft.attributes || []);
+  const extras = (view.extras && view.extras.length) ? view.extras : (nft.extras || []);
   const raw = info.raw_json || "";
   const picture = image && image.cid
     ? `<p class="muted">Picture ${idHtml(image.cid)}</p>`
-    : (image && safeHttpClient(image.src) ? `<p class="muted">Picture <a href="${esc(safeHttpClient(image.src))}" target="_blank" rel="noopener noreferrer">${esc(safeHttpClient(image.src))}</a></p>` : "");
+    : "";
+  const extraHtml = (extras || []).map((row) => {
+    if (!row || typeof row !== "object") return "";
+    const label = plainClient(row.label || "");
+    const value = plainClient(row.value || "");
+    if (!label || !value) return "";
+    return `<p><span class="muted">${esc(label)}</span> ${esc(value)}</p>`;
+  }).join("");
   const fields = [
     name ? `<h3 class="nft-name">${esc(name)}</h3>` : "",
+    ticker ? `<p><span class="muted">Ticker</span> ${esc(ticker)}</p>` : "",
     description ? `<p class="asset-desc">${esc(description)}</p>` : "",
+    issuer ? `<p><span class="muted">Issuer</span> ${esc(issuer)}</p>` : "",
     external ? `<p><span class="muted">Website</span> <a href="${esc(external)}" target="_blank" rel="noopener noreferrer">${esc(external)}</a></p>` : "",
+    website && website !== external ? `<p><span class="muted">Website</span> <a href="${esc(website)}" target="_blank" rel="noopener noreferrer">${esc(website)}</a></p>` : "",
     picture,
     traitGrid(attrs),
+    extraHtml,
   ].join("");
   const rawBlock = raw
     ? `<details class="raw-json"><summary>Raw JSON</summary><div class="raw-json-tools"><button type="button" class="copy-btn" data-copy-from="raw-json-body">Copy</button></div><pre id="raw-json-body" class="media-text">${esc(raw)}</pre></details>`
@@ -1291,8 +1354,44 @@ function renderMetadataCard(info) {
   return `<div class="card metadata-card" style="margin-bottom:16px"><h2>Metadata</h2>${fields}${rawBlock}</div>`;
 }
 
-function ipfsUnavailable(message) {
-  return `<div class="media-empty"><span class="badge">IPFS</span><p>${esc(message)}</p></div>`;
+function ipfsUnavailable(message, cid) {
+  const id = normalizeIpfsClient(cid) || "";
+  const link = id
+    ? `<a href="${esc(pinataViewUrl(id))}" target="_blank" rel="noopener noreferrer">${esc(id)}</a>`
+    : "";
+  return `<div class="media-empty"><span class="badge ipfs">IPFS</span><p>${esc(message)}</p>${link}</div>`;
+}
+
+function mediaTag(info, cid) {
+  const urls = presentationUrls(info);
+  const kind = (info.presentation && info.presentation.type) || "";
+  const posterList = ((info.presentation && info.presentation.poster) || []).filter(isAllowedMedia);
+  const poster = posterList[0] || "";
+  if (!urls.length || kind === "none") {
+    const empty = info.kind === "json" ? "No picture in this file." : "This file did not load.";
+    return `<div class="media-stage">${ipfsUnavailable(empty, cid)}</div>`;
+  }
+  if (kind === "video") {
+    return `
+      <div class="media-stage video">
+        <video muted autoplay loop playsinline controls preload="metadata"${poster ? ` poster="${esc(poster)}"` : ""} src="${esc(urls[0])}"${fallbackAttr(urls)}></video>
+      </div>`;
+  }
+  if (kind === "audio") {
+    return `
+      <div class="media-stage">
+        <div class="media-empty">
+          <span class="badge ipfs">Audio</span>
+          <p><a href="${esc(urls[0])}" target="_blank" rel="noopener noreferrer">Open audio</a></p>
+          ${cid ? `<a href="${esc(pinataViewUrl(cid))}" target="_blank" rel="noopener noreferrer">${esc(cid)}</a>` : ""}
+        </div>
+      </div>`;
+  }
+  const alt = (info.nft && info.nft.name) || cid;
+  return `
+    <figure class="media-frame">
+      <img src="${esc(urls[0])}" alt="${esc(alt)}" data-lightbox="${esc(urls[0])}"${fallbackAttr(urls)} />
+    </figure>`;
 }
 
 function renderMediaStage(info, cid) {
@@ -1305,51 +1404,10 @@ function renderMediaStage(info, cid) {
         </div>
       </div>`;
   }
-  const nft = info.nft || {};
-  if (info.view && info.view.image && !nft.image) nft.image = info.view.image;
-  const poster = mediaSrc(nft.image);
-  const anim = mediaSrc(nft.animation);
-  const audio = mediaSrc(nft.audio);
-  if (info.kind === "video" || (info.kind === "json" && anim)) {
-    const srcs = info.kind === "video" ? ipfsSources(cid, info.gateways) : mediaFallbacks(nft.animation, info.gateways);
-    const src = srcs[0] || (info.kind === "video" ? info.url : anim);
-    return `
-      <div class="media-stage video">
-        <video controls playsinline preload="metadata"${poster ? ` poster="${esc(poster)}"` : ""} src="${esc(src)}"${fallbackAttr(srcs)}></video>
-      </div>`;
-  }
-  if (info.kind === "image" || poster) {
-    const srcs = info.kind === "image" ? ipfsSources(cid, info.gateways) : mediaFallbacks(nft.image, info.gateways);
-    const src = srcs[0] || (info.kind === "image" ? info.url : poster);
-    const alt = nft.name || cid;
-    return `
-      <figure class="media-frame">
-        <img src="${esc(src)}" alt="${esc(alt)}" data-lightbox="${esc(src)}"${fallbackAttr(srcs)} />
-      </figure>`;
-  }
-  if (info.kind === "audio" || audio) {
-    const srcs = info.kind === "audio" ? ipfsSources(cid, info.gateways) : mediaFallbacks(nft.audio, info.gateways);
-    const src = srcs[0] || (info.kind === "audio" ? info.url : audio);
-    return `
-      <div class="media-stage">
-        <div class="media-empty">
-          <audio controls src="${esc(src)}"${fallbackAttr(srcs)}></audio>
-        </div>
-      </div>`;
-  }
-  if (info.kind === "json") {
-    return `<div class="media-stage">${ipfsUnavailable("No picture in this file.")}</div>`;
-  }
-  if (info.kind === "text") {
+  if (info.kind === "text" && !(info.presentation && info.presentation.type && info.presentation.type !== "none")) {
     return `<pre class="media-text">${esc(info.text || "")}</pre>`;
   }
-  return `
-    <div class="media-stage">
-      <div class="media-empty">
-        <span class="badge">${esc(info.content_type || "file")}</span>
-        <p><a href="${esc(info.url)}" target="_blank" rel="noopener noreferrer">Open this file</a></p>
-      </div>
-    </div>`;
+  return mediaTag(info, cid);
 }
 
 function showGatewayImage(cid, urls) {
@@ -1360,27 +1418,21 @@ function showGatewayImage(cid, urls) {
     </figure>`;
 }
 
-async function loadAssetMedia(cid, gateways) {
+async function loadAssetMedia(cid, gateways, assetName) {
   const stage = $("#asset-media");
   const metaBox = $("#asset-nft");
   if (!stage) return;
-  const urls = ipfsSources(cid, gateways);
+  stage.setAttribute("data-cid", cid);
   try {
-    const info = await api("/ipfs/inspect?cid=" + encodeURIComponent(cid));
+    const info = await api(
+      "/ipfs/inspect?cid=" + encodeURIComponent(cid) + "&name=" + encodeURIComponent(assetName || "")
+    );
     stage.innerHTML = renderMediaStage(info, cid);
-    const poster = mediaSrc((info.nft || {}).image);
-    const vid = stage.querySelector("video");
-    if (vid && poster) {
-      vid.addEventListener("error", () => {
-        if (advanceIfPossible(vid)) return;
-        stage.innerHTML = showGatewayImage(cid, mediaFallbacks((info.nft || {}).image, urls));
-      });
-    }
     const cap = $("#asset-media-cap");
     if (cap) cap.innerHTML = captionHtml(cid, info.kind);
     if (metaBox) metaBox.innerHTML = renderMetadataCard(info);
   } catch (e) {
-    stage.innerHTML = showGatewayImage(cid, urls);
+    stage.innerHTML = `<div class="media-stage">${ipfsUnavailable("This file did not load.", cid)}</div>`;
     const cap = $("#asset-media-cap");
     if (cap) cap.innerHTML = captionHtml(cid, "");
     if (metaBox) metaBox.innerHTML = "";
@@ -1448,7 +1500,7 @@ async function pageAsset(name) {
     <h1 class="page-title">${esc(a.name)}</h1>
     <div class="asset-hero">
       <div class="card media-card">
-        <div id="asset-media">${cid ? renderMediaStage(null, cid) : `
+        <div id="asset-media" data-cid="${esc(cid)}">${cid ? renderMediaStage(null, cid) : `
           <div class="media-stage">
             <div class="media-empty">
               <span class="badge">No file</span>
@@ -1486,7 +1538,7 @@ async function pageAsset(name) {
       </div>
     </div>`;
   bindPagers();
-  if (cid) loadAssetMedia(cid, a.ipfs_gateways);
+  if (cid) loadAssetMedia(cid, a.ipfs_gateways, a.name);
 }
 
 function hashQuery() {

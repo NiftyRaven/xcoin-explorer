@@ -19,7 +19,8 @@ from explorer.chain import (
     SUBUNIT,
     TICKER,
 )
-from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
+from explorer.decode import normalize_ipfs
+from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_asset_ipfs, valid_cid
 from explorer.links import MAX_BATCH, AddressLinks, addresses_in, tx_sighash_all
 from explorer.queries import Queries, norm_handle, page_offset, paginate
 from explorer.statcache import StaleWhileRefreshCache
@@ -81,6 +82,34 @@ def live_lottery_handles(queries: Queries, indexer, rpc) -> tuple[list[str], lis
                 seen.add(handle)
                 hat.append(handle)
     return hat, heartbeat, live if isinstance(live, dict) else None
+
+
+def _cid_is_onchain_hash(queries: Queries, rpc, name: str, cid: str) -> bool:
+    """True only when this CID is the asset's on-chain ipfs_hash.
+
+    A connected node is asked with getassetdata. If the node is down, the
+    hash already stored from the chain is used. Other CIDs are refused.
+    """
+    wanted = normalize_ipfs(cid)
+    if not wanted:
+        return False
+    canonical = ""
+    if name:
+        canonical = queries.asset_name(name) or ""
+        if not canonical:
+            return False
+    if rpc is not None and getattr(rpc, "connected", False) and canonical:
+        data = rpc.try_call("getassetdata", canonical, default=None)
+        if not isinstance(data, dict):
+            return False
+        onchain = normalize_ipfs(data.get("ipfs_hash") or data.get("ipfs") or data.get("message") or "")
+        return onchain == wanted
+    if canonical:
+        row = queries.db.conn.execute("SELECT ipfs FROM assets WHERE name=?", (canonical,)).fetchone()
+        stored = normalize_ipfs(row["ipfs"] if row else "")
+        return stored == wanted
+    row = queries.db.conn.execute("SELECT name FROM assets WHERE ipfs=?", (wanted,)).fetchone()
+    return row is not None
 
 
 def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | None = None, links: AddressLinks | None = None, relay_trades=None) -> FastAPI:
@@ -247,20 +276,41 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         return labeled(a)
 
     @app.get("/api/ipfs/inspect")
-    def ipfs_inspect(cid: str = ""):
+    def ipfs_inspect(cid: str = "", name: str = ""):
+        norm = normalize_ipfs(cid)
+        if not valid_cid(norm):
+            return JSONResponse({"error": "invalid IPFS CID"}, status_code=400, headers={"Cache-Control": "no-store"})
         try:
-            return JSONResponse(inspect_cid(cid), headers={"Cache-Control": "public, max-age=300"})
+            allowed = _cid_is_onchain_hash(queries, rpc, name, norm)
+        finally:
+            # Do not keep the database open while the relay or gateway answers.
+            queries.db.discard_thread_connection()
+        if not allowed:
+            return JSONResponse(
+                {"error": "CID is not this asset's on-chain ipfs hash"},
+                status_code=400,
+                headers={"Cache-Control": "no-store"},
+            )
+        try:
+            return JSONResponse(inspect_asset_ipfs(norm, name), headers={"Cache-Control": "public, max-age=300"})
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400, headers={"Cache-Control": "no-store"})
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=502, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/ipfs/content/{cid}")
-    def ipfs_content(cid: str):
-        if not valid_cid(cid):
+    def ipfs_content(cid: str, name: str = ""):
+        norm = normalize_ipfs(cid)
+        if not valid_cid(norm):
             return JSONResponse({"error": "invalid IPFS CID"}, status_code=400)
         try:
-            body, content_type = fetch_content(cid)
+            allowed = _cid_is_onchain_hash(queries, rpc, name, norm)
+        finally:
+            queries.db.discard_thread_connection()
+        if not allowed:
+            return JSONResponse({"error": "CID is not this asset's on-chain ipfs hash"}, status_code=400)
+        try:
+            body, content_type = fetch_content(norm)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         except Exception as e:

@@ -136,7 +136,10 @@ def test_public_tree_is_view_only_no_pinata_secrets():
     py = (root / "explorer" / "ipfs.py").read_text(encoding="utf-8")
     assert 'PINATA_VIEW_GATEWAY = "xfer.mypinata.cloud"' in js
     assert 'DEDICATED_GATEWAY = "https://xfer.mypinata.cloud/ipfs/"' in py
-    assert py.index("DEDICATED_GATEWAY") < py.index("https://gateway.pinata.cloud/ipfs/")
+    assert "gateway.pinata.cloud" not in py
+    assert "ipfs.io" not in py
+    assert 'RELAY_LAUNCH_IPFS = "https://xferchain.net/api/launch/ipfs/"' in py
+    assert 'RELAY_ASSETS_IPFS = "https://xferchain.net/api/assets/ipfs/"' in py
     assert "ipfs_content_url" in py
     assert "@app.get(\"/api/ipfs/inspect\")" in api
     assert "@app.get(\"/api/ipfs/content/{cid}\")" in api

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import urllib.parse
 from dataclasses import dataclass, field
 
 from explorer.chain import OP_RVN_ASSET, RVN_PREFIX, XHB1, XID1, XVA1, classify_asset_name
@@ -452,11 +453,30 @@ def normalize_ipfs(value: str | bytes | None) -> str:
     s = str(value).strip()
     if not s or s in ("0", "00"):
         return ""
-    if s.startswith("ipfs://"):
+    if s.lower().startswith("ipfs://"):
         s = s[7:]
     if s.startswith("/ipfs/"):
         s = s[6:]
-    s = s.split("/")[0].split("?")[0].strip()
+    # ipfs://ipfs/<cid> and ipfs://ipfs/<cid>/file.png
+    while s.lower().startswith("ipfs/"):
+        s = s[5:]
+    if s.startswith("/"):
+        s = s[1:]
+    # Gateway URL pasted as a media link: keep the CID, drop the host.
+    lower = s.lower()
+    if lower.startswith("http://") or lower.startswith("https://"):
+        try:
+            path = urllib.parse.urlsplit(s).path
+        except ValueError:
+            return ""
+        marker = "/ipfs/"
+        idx = path.lower().find(marker)
+        if idx < 0:
+            return ""
+        s = path[idx + len(marker) :]
+        while s.lower().startswith("ipfs/"):
+            s = s[5:]
+    s = s.split("/")[0].split("?")[0].split("#")[0].strip()
     if s.startswith("Qm") and 44 <= len(s) <= 52:
         return s
     if s.startswith(("bafy", "bafk", "bafz", "bafb")) and len(s) >= 50:
