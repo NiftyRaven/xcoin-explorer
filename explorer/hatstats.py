@@ -44,6 +44,56 @@ def valid_handle(handle: str | None) -> bool:
     return bool(name) and all(c in _HANDLE_CHARS for c in name)
 
 
+# These expressions match the indexes in explorer/db.py. A different spelling
+# would make SQLite scan the whole hat table.
+_ACTIVE_BY_HANDLE = """
+SELECT height, node_id FROM lottery_active
+WHERE height>=1 AND lower(TRIM(xaccount))=?
+"""
+_ACTIVE_BY_NODE = """
+SELECT height, node_id FROM lottery_active
+WHERE height>=1 AND lower(node_id) IN ({marks})
+  AND (xaccount IS NULL OR TRIM(xaccount)='')
+"""
+_WINS_BY_HANDLE = """
+SELECT height, rank, node_id, address, amount FROM lottery_wins
+WHERE height>=1 AND lower(TRIM(xaccount))=?
+"""
+
+
+def handle_in_records(conn, handle: str) -> bool:
+    """True when this name has an identity, a seen node, or a hat row.
+
+    Each probe stops at the first hit. Unknown names never reach the aggregates.
+    """
+    if not valid_handle(handle):
+        return False
+    probes = (
+        "SELECT 1 FROM identities WHERE handle=? LIMIT 1",
+        "SELECT 1 FROM node_seen WHERE lower(TRIM(xaccount))=? LIMIT 1",
+        "SELECT 1 FROM lottery_active WHERE lower(TRIM(xaccount))=? LIMIT 1",
+        "SELECT 1 FROM lottery_wins WHERE lower(TRIM(xaccount))=? LIMIT 1",
+    )
+    for sql in probes:
+        if conn.execute(sql, (handle,)).fetchone() is not None:
+            return True
+    return False
+
+
+def indexed_lookup_plans(conn) -> dict[str, str]:
+    """Query plans for the handle and node-id lookups. Tests check the index names."""
+    statements = {
+        "active_handle": (_ACTIVE_BY_HANDLE, ("x",)),
+        "wins_handle": (_WINS_BY_HANDLE, ("x",)),
+        "active_node": (_ACTIVE_BY_NODE.format(marks="?"), ("n",)),
+    }
+    plans: dict[str, str] = {}
+    for name, (sql, params) in statements.items():
+        details = [str(row["detail"]) for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params)]
+        plans[name] = " ".join(details)
+    return plans
+
+
 def absence_reason(
     *,
     in_hat: bool,
@@ -121,8 +171,7 @@ def compute_hat_stats(db, handle: str, *, now: int | None = None, recent: int = 
         now = int(time.time())
     recent = max(1, min(int(recent or RECENT_DRAWS), 50))
     conn = db.conn
-    ids = _node_ids(conn, handle)
-    included = _included_heights(conn, handle, ids)
+    ids, included, draws_by_node, span_by_node = _participation(conn, handle)
     wins = _win_rows(conn, handle, ids)
     seen = _node_seen(conn, handle, ids)
     for row in seen:
@@ -188,10 +237,6 @@ def compute_hat_stats(db, handle: str, *, now: int | None = None, recent: int = 
             bucket["wins"] += 1
             if nid:
                 bucket["node_ids"].add(nid)
-
-    draws_by_node, span_by_node = _draws_by_node(conn, handle, ids)
-    for nid, span in span_by_node.items():
-        ids.add(nid)
 
     last_seen: int | None = None
     seen_by_id: dict[str, dict] = {}
@@ -377,16 +422,10 @@ def _chunks(items, size=400):
         yield items[i : i + size]
 
 
-def _node_ids(conn, handle: str) -> set[str]:
+def _seed_node_ids(conn, handle: str) -> set[str]:
+    """Node ids known before reading hat rows: wins, heartbeats, and the identity."""
     ids: set[str] = set()
     queries = (
-        (
-            """
-            SELECT node_id FROM lottery_active
-            WHERE node_id IS NOT NULL AND TRIM(node_id)!='' AND lower(TRIM(xaccount))=?
-            """,
-            (handle,),
-        ),
         (
             """
             SELECT node_id FROM lottery_wins
@@ -415,40 +454,42 @@ def _node_ids(conn, handle: str) -> set[str]:
     return ids
 
 
-def _included_heights(conn, handle: str, ids: set[str]) -> set[int]:
-    heights: set[int] = set()
-    for row in conn.execute(
-        """
-        SELECT DISTINCT height FROM lottery_active
-        WHERE height>=1 AND lower(TRIM(xaccount))=?
-        """,
-        (handle,),
-    ).fetchall():
-        heights.add(int(row["height"]))
+def _participation(conn, handle: str):
+    """One pass over this handle's hat rows, including blank rows for its node ids.
+
+    Reading each row once keeps a busy handle off the full table. Heights are a
+    set, so two of this handle's nodes in the same draw still count as one draw.
+    """
+    ids = _seed_node_ids(conn, handle)
+    rows = list(conn.execute(_ACTIVE_BY_HANDLE, (handle,)))
+    for row in rows:
+        nid = (row["node_id"] or "").lower()
+        if nid:
+            ids.add(nid)
     for chunk in _chunks(ids):
         marks = ",".join("?" * len(chunk))
-        for row in conn.execute(
-            f"""
-            SELECT DISTINCT height FROM lottery_active
-            WHERE height>=1 AND lower(node_id) IN ({marks})
-              AND (xaccount IS NULL OR TRIM(xaccount)='')
-            """,
-            tuple(chunk),
-        ).fetchall():
-            heights.add(int(row["height"]))
-    return heights
+        rows.extend(conn.execute(_ACTIVE_BY_NODE.format(marks=marks), tuple(chunk)).fetchall())
+    included: set[int] = set()
+    draws: dict[str, set[int]] = {}
+    span: dict[str, dict] = {}
+    for row in rows:
+        height = int(row["height"])
+        included.add(height)
+        nid = (row["node_id"] or "").lower()
+        if not nid:
+            continue
+        ids.add(nid)
+        draws.setdefault(nid, set()).add(height)
+        cur = span.setdefault(nid, {"first": height, "last": height})
+        if height < cur["first"]:
+            cur["first"] = height
+        if height > cur["last"]:
+            cur["last"] = height
+    return ids, included, draws, span
 
 
 def _win_rows(conn, handle: str, ids: set[str]) -> list:
-    rows = list(
-        conn.execute(
-            """
-            SELECT height, rank, node_id, address, amount FROM lottery_wins
-            WHERE height>=1 AND lower(TRIM(xaccount))=?
-            """,
-            (handle,),
-        ).fetchall()
-    )
+    rows = list(conn.execute(_WINS_BY_HANDLE, (handle,)).fetchall())
     seen = {(int(r["height"]), int(r["rank"])) for r in rows}
     for chunk in _chunks(ids):
         marks = ",".join("?" * len(chunk))
@@ -515,43 +556,6 @@ def _hat_sizes(conn, heights: set[int]) -> dict[int, int]:
         ).fetchall():
             sizes[int(row["height"])] = int(row["n"] or 0)
     return sizes
-
-
-def _draws_by_node(conn, handle: str, ids: set[str]) -> tuple[dict[str, set[int]], dict[str, dict]]:
-    draws: dict[str, set[int]] = {}
-    span: dict[str, dict] = {}
-
-    def take(row, count: bool) -> None:
-        nid = (row["node_id"] or "").lower()
-        if not nid:
-            return
-        height = int(row["height"])
-        if count:
-            draws.setdefault(nid, set()).add(height)
-            cur = span.setdefault(nid, {"first": height, "last": height})
-            cur["first"] = min(cur["first"], height)
-            cur["last"] = max(cur["last"], height)
-
-    for row in conn.execute(
-        """
-        SELECT height, node_id FROM lottery_active
-        WHERE height>=1 AND lower(TRIM(xaccount))=?
-        """,
-        (handle,),
-    ).fetchall():
-        take(row, True)
-    for chunk in _chunks(ids):
-        marks = ",".join("?" * len(chunk))
-        for row in conn.execute(
-            f"""
-            SELECT height, node_id FROM lottery_active
-            WHERE height>=1 AND lower(node_id) IN ({marks})
-              AND (xaccount IS NULL OR TRIM(xaccount)='')
-            """,
-            tuple(chunk),
-        ).fetchall():
-            take(row, True)
-    return draws, span
 
 
 def _recent_draws(conn, included: set[int], win_heights: set[int], recent: int) -> list[dict]:

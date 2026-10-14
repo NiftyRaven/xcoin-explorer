@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from explorer.api import create_app
 from explorer.config import Settings
 from explorer.db import Database
-from explorer.hatstats import absence_reason, compute_hat_stats, luck_note
+from explorer.hatstats import absence_reason, compute_hat_stats, indexed_lookup_plans, luck_note
 from explorer.indexer import Indexer
 from explorer.queries import Queries
 from explorer.rpc import XCoinRPC
@@ -256,6 +256,9 @@ def test_live_reason_recently_restarted_and_in_hat(tmp_path: Path):
     )
     _block(db, 1, 10, 1)
     _active(db, 1, "aa", "zekedrops")
+    db.conn.execute(
+        "INSERT INTO identities(handle, node_id) VALUES('alice','bb')"
+    )
     db.commit()
     zeke = client.get("/api/handle/zekedrops/hat-stats").json()
     assert zeke["in_hat"] is False
@@ -289,6 +292,55 @@ def test_page_keeps_old_identity_markup_and_adds_tips(tmp_path: Path):
     rpc = XCoinRPC(Settings())
     indexer = Indexer(db, rpc)
     client = TestClient(create_app(Queries(db), indexer, rpc))
-    assert client.get("/api/handle/someone/hat-stats").status_code == 200
+    assert client.get("/api/handle/someone/hat-stats").status_code == 404
     assert client.get("/api/handle/someone").status_code == 200
+    db.close()
+
+
+def test_lookup_plans_use_expression_indexes(tmp_path: Path):
+    db = _db(tmp_path)
+    plans = indexed_lookup_plans(db.conn)
+    assert "idx_active_xaccount_norm" in plans["active_handle"]
+    assert "SCAN lottery_active" not in plans["active_handle"]
+    assert "idx_wins_xaccount_norm" in plans["wins_handle"]
+    assert "SCAN lottery_wins" not in plans["wins_handle"]
+    assert "idx_active_node_lower" in plans["active_node"]
+    assert "SCAN lottery_active" not in plans["active_node"]
+    db.close()
+
+
+def test_unknown_handle_is_404_and_cache_is_per_handle(tmp_path: Path):
+    db, client = _client(
+        tmp_path,
+        info={"stamped_handles": ["zekedrops"], "attestation_required": True},
+        nodes=[{"id": "aa", "xaccount": "zekedrops", "lastseen": 40, "attested": True}],
+    )
+    _block(db, 1, 1_000, 1)
+    _active(db, 1, "aa", "zekedrops")
+    db.commit()
+    missing = client.get("/api/handle/nobody")
+    assert missing.status_code == 200
+    hat_missing = client.get("/api/handle/nobody/hat-stats")
+    assert hat_missing.status_code == 404
+    assert hat_missing.json()["error"] == "not found"
+    assert client.get("/api/handle/nope nope/hat-stats").status_code == 400
+
+    first = client.get("/api/handle/zekedrops/hat-stats").json()
+    assert first["draws_all"] == 1
+    assert first["in_hat"] is True
+    _block(db, 2, 2_000, 1)
+    _active(db, 2, "aa", "zekedrops")
+    db.commit()
+    client.app.state.rpc.nodes = [
+        {"id": "aa", "xaccount": "zekedrops", "lastseen": 99, "attested": False}
+    ]
+    second = client.get("/api/handle/zekedrops/hat-stats").json()
+    # A new block and a new heartbeat stay out of the answer until the time limit.
+    assert second["draws_all"] == first["draws_all"]
+    assert second["last_heartbeat"] == first["last_heartbeat"]
+    assert second["reason"] == first["reason"]
+    assert client.app.state.hat_cache._ttl == 60.0
+    assert client.app.state.hat_cache._max_keys == 256
+    assert client.app.state.live_node_cache._ttl == 60.0
+    assert client.app.state.live_node_cache._max_keys == 8
     db.close()

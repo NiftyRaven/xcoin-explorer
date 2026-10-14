@@ -19,7 +19,7 @@ from explorer.chain import (
     SUBUNIT,
     TICKER,
 )
-from explorer.hatstats import attach_live_status, compute_hat_stats
+from explorer.hatstats import attach_live_status, compute_hat_stats, handle_in_records, valid_handle
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.links import MAX_BATCH, AddressLinks, addresses_in, tx_sighash_all
 from explorer.queries import Queries, norm_handle, page_offset, paginate
@@ -136,7 +136,10 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         data["labels"] = links.labels(addresses_in(data) | set(extra))
         return data
     app.state.stats_cache = StaleWhileRefreshCache()
-    app.state.hat_cache = StaleWhileRefreshCache(max_keys=256)
+    # History is keyed by handle only and refreshed about once a minute.
+    # Live heartbeats use the same time limit. Both caches stay bounded.
+    app.state.hat_cache = StaleWhileRefreshCache(ttl=60.0, max_keys=256)
+    app.state.live_node_cache = StaleWhileRefreshCache(ttl=60.0, max_keys=8)
 
     if WEB.exists():
         app.mount("/static", StaticFiles(directory=str(WEB)), name="static")
@@ -374,19 +377,27 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
     def handle_hat_stats(name: str):
         """Draw history for one handle, merged across every node id it has used."""
         handle = norm_handle(name)
-        height = queries.db.indexed_height()
+        if not valid_handle(handle):
+            return JSONResponse({"error": "invalid handle"}, status_code=400)
+        # Unknown names stop here. The probe is an index lookup, not the aggregate.
+        if not handle_in_records(queries.db.conn, handle):
+            return JSONResponse({"error": "not found"}, status_code=404)
         hist = app.state.hat_cache.get(
-            ("hat", handle, height),
+            ("hat", handle),
             lambda: compute_hat_stats(queries.db, handle),
         )
         if hist is None:
             return JSONResponse({"error": "invalid handle"}, status_code=400)
         hat, heartbeat, live = live_lottery_handles(queries, indexer, rpc)
+        nodes = app.state.live_node_cache.get(
+            ("live-nodes",),
+            lambda: live_node_details(indexer, rpc),
+        )
         body = attach_live_status(
             hist,
             hat_handles=set(hat),
             heartbeat_handles=set(heartbeat),
-            nodes=live_node_details(indexer, rpc),
+            nodes=nodes,
             live=live,
         )
         return labeled(body)

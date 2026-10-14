@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS lottery_wins (
 CREATE INDEX IF NOT EXISTS idx_wins_addr ON lottery_wins(address);
 CREATE INDEX IF NOT EXISTS idx_wins_handle ON lottery_wins(xaccount);
 CREATE INDEX IF NOT EXISTS idx_wins_node ON lottery_wins(node_id);
+-- Leading expression matches lower(TRIM(xaccount)). Extra columns keep the read off the table.
+CREATE INDEX IF NOT EXISTS idx_wins_xaccount_norm ON lottery_wins(lower(TRIM(xaccount)), height, rank, node_id, address, amount);
 
 CREATE TABLE IF NOT EXISTS lottery_active (
     height INTEGER NOT NULL,
@@ -109,6 +111,9 @@ CREATE TABLE IF NOT EXISTS lottery_active (
     PRIMARY KEY (height, node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_active_xaccount ON lottery_active(xaccount);
+-- Leading expressions match lower(TRIM(xaccount)) and lower(node_id).
+CREATE INDEX IF NOT EXISTS idx_active_xaccount_norm ON lottery_active(lower(TRIM(xaccount)), height, node_id);
+CREATE INDEX IF NOT EXISTS idx_active_node_lower ON lottery_active(lower(node_id), height, node_id, xaccount);
 
 CREATE TABLE IF NOT EXISTS assets (
     name TEXT PRIMARY KEY,
@@ -430,6 +435,15 @@ class Database:
             self.conn.execute("ALTER TABLE lottery_active ADD COLUMN n INTEGER DEFAULT 0")
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_active_xaccount ON lottery_active(xaccount)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_xaccount_norm ON lottery_active(lower(TRIM(xaccount)), height, node_id)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_node_lower ON lottery_active(lower(node_id), height, node_id, xaccount)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_wins_xaccount_norm ON lottery_wins(lower(TRIM(xaccount)), height, rank, node_id, address, amount)"
         )
         io_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(txio)")}
         if "op_return" not in io_cols:
