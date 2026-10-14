@@ -537,3 +537,86 @@ td .id-line { max-width: min(100%, 260px); }
   th:first-child, td:first-child { padding-left: 0; }
   th:last-child, td:last-child { padding-right: 0; }
 }
+
+/* Hat stats on an identity page. Uses the same colors as the rest of the explorer. */
+.hat-panel .grid.stats { margin-top: 12px; }
+.hat-panel .card.stat {
+  box-shadow: none;
+  background: var(--panel2);
+}
+.hat-panel .stat b { font-size: 18px; line-height: 1.25; }
+.hat-panel .stat b.hat-beat { font-size: 14px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.hat-of { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.hat-why { margin: 14px 0 0; line-height: 1.45; }
+.hat-why-label { color: var(--muted); font-weight: 600; margin-right: 6px; }
+.luck-note {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  line-height: 1.45;
+}
+.luck-note.below { border-color: #5a4518; }
+.luck-note.above { border-color: #1e4a36; }
+.luck-note.average { border-color: #2a3b63; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.row-in td { background: rgba(76, 141, 255, 0.06); }
+.row-won td { background: rgba(226, 179, 74, 0.08); }
+.info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+.info-btn {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font: 600 11px/1 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+.info-btn:hover, .info-btn:focus-visible { color: var(--text); border-color: var(--blue); outline: none; }
+.info-pop {
+  display: none;
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(280px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+}
+.info:hover .info-pop,
+.info:focus-within .info-pop,
+.info.on .info-pop { display: block; }
+th .info-pop, .stat .info-pop { font-size: 13px; }
+@media (max-width: 720px) {
+  .info-pop {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: 12px;
+    width: auto;
+  }
+  .hat-panel .stat b { font-size: 16px; }
+}
