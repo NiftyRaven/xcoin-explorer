@@ -283,7 +283,7 @@ def test_page_keeps_old_identity_markup_and_adds_tips(tmp_path: Path):
     assert "producer" not in js
     assert "8000" not in js
     assert ".info-btn" in css
-    assert "prefers-color-scheme: light" in css
+    assert "prefers-color-scheme" not in css
     assert "?v=explorer-public-1" in html
     db = Database(tmp_path / "offline.db")
     rpc = XCoinRPC(Settings())

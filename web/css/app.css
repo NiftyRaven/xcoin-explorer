@@ -1,5 +1,4 @@
 :root {
-  color-scheme: dark;
   --bg: #07080d;
   --bg2: #0c0f16;
   --panel: #11151f;
@@ -620,48 +619,4 @@ th .info-pop, .stat .info-pop { font-size: 13px; }
     width: auto;
   }
   .hat-panel .stat b { font-size: 16px; }
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-    --bg: #f4f6fb;
-    --bg2: #ffffff;
-    --panel: #ffffff;
-    --panel2: #f3f6fb;
-    --line: #d5dce8;
-    --text: #1a2030;
-    --muted: #5c677c;
-    --faint: #6e788c;
-    --blue: #1d5fd0;
-    --blue2: #184ea8;
-    --gold: #8a6410;
-    --gold2: #6d4e0c;
-    --green: #0d7a45;
-    --red: #c4233a;
-    --shadow: 0 10px 28px rgba(20, 30, 50, 0.08);
-  }
-  body {
-    background-image:
-      radial-gradient(1200px 500px at 10% -10%, rgba(29, 95, 208, 0.08), transparent 50%),
-      radial-gradient(800px 400px at 90% 0%, rgba(138, 100, 16, 0.06), transparent 45%),
-      linear-gradient(180deg, #f7f8fc, #eef2f8 40%, #f7f8fc);
-  }
-  a:hover, .site-home:hover, .gw-chip:hover { color: #0b2f6e; }
-  .site-home { background: #e8f0ff; border-color: #b9cbed; }
-  .mark {
-    background: linear-gradient(160deg, #e7eefc, #f8faff);
-    border-color: #c5d4ee;
-    box-shadow: none;
-  }
-  tr:hover td { background: rgba(20, 40, 80, 0.04); }
-  .luck-bars { background: #e6ebf3; }
-  .notice { color: #6e5010; background: rgba(226, 179, 74, 0.14); border-color: #e2d2a2; }
-  .badge.guest { color: #5b3fbf; }
-  .pg-btn:hover, .btn:hover, .search input:focus { border-color: #8aa4d4; }
-  .luck-note.below { border-color: #e2d2a2; }
-  .luck-note.above { border-color: #b7e4cc; }
-  .luck-note.average { border-color: #c5d4ee; }
-  .row-in td { background: rgba(29, 95, 208, 0.06); }
-  .row-won td { background: rgba(138, 100, 16, 0.08); }
 }
