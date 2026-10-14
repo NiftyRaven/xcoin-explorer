@@ -262,6 +262,43 @@ function yesNo(v) {
   return v ? "yes" : "no";
 }
 
+function infoTip(label, text) {
+  return `<span class="info"><button type="button" class="info-btn" aria-label="About ${esc(label)}" aria-expanded="false">?</button><span class="info-pop" role="tooltip">${esc(text)}</span></span>`;
+}
+
+function closeInfoTips() {
+  document.querySelectorAll(".info.on").forEach((el) => {
+    el.classList.remove("on");
+    const btn = el.querySelector(".info-btn");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+  });
+}
+
+function placeInfoTip(wrap) {
+  const pop = wrap && wrap.querySelector(".info-pop");
+  if (!pop) return;
+  if (window.innerWidth <= 720) {
+    pop.style.left = "";
+    pop.style.right = "";
+    pop.style.top = "";
+    pop.style.bottom = "";
+    return;
+  }
+  pop.style.left = "0px";
+  pop.style.right = "auto";
+  pop.style.top = "";
+  pop.style.bottom = "";
+  const rect = pop.getBoundingClientRect();
+  if (rect.right > window.innerWidth - 8) {
+    pop.style.left = `${-(rect.right - (window.innerWidth - 8))}px`;
+  }
+  const next = pop.getBoundingClientRect();
+  if (next.bottom > window.innerHeight - 8) {
+    pop.style.top = "auto";
+    pop.style.bottom = "calc(100% + 6px)";
+  }
+}
+
 function timeAgo(ts) {
   if (!ts) return "—";
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -319,6 +356,21 @@ function copyable(text) {
 }
 
 document.addEventListener("click", (e) => {
+  const tipBtn = e.target.closest(".info-btn");
+  if (tipBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = tipBtn.closest(".info");
+    const willOpen = wrap && !wrap.classList.contains("on");
+    closeInfoTips();
+    if (willOpen && wrap) {
+      wrap.classList.add("on");
+      tipBtn.setAttribute("aria-expanded", "true");
+      placeInfoTip(wrap);
+    }
+    return;
+  }
+  if (!e.target.closest(".info")) closeInfoTips();
   const toggle = e.target.closest("[data-id-toggle]");
   if (toggle) {
     e.preventDefault();
@@ -366,8 +418,21 @@ document.addEventListener("click", (e) => {
   if (row) location.hash = row.getAttribute("data-href");
 });
 
+document.addEventListener("mouseover", (e) => {
+  const wrap = e.target.closest(".info");
+  if (wrap) placeInfoTip(wrap);
+});
+
+document.addEventListener("focusin", (e) => {
+  const wrap = e.target.closest(".info");
+  if (wrap) placeInfoTip(wrap);
+});
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeLightbox();
+  if (e.key === "Escape") {
+    closeLightbox();
+    closeInfoTips();
+  }
 });
 
 document.addEventListener("error", (e) => {
@@ -1614,8 +1679,102 @@ function memberStatusBadges(m) {
   return `<span class="badge">offline</span>`;
 }
 
+function fmtShare(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  return `${Number(n).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+}
+
+function fmtExpected(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function hatStatsHtml(s) {
+  if (!s) {
+    return `<div class="card hat-panel" style="margin-top:16px"><h2>Hat stats ${infoTip("Hat stats", "How often this name was in the minute draw. These numbers could not be loaded.")}</h2><p class="muted">Hat stats could not be loaded. The rest of this page is unchanged.</p></div>`;
+  }
+  const inHat = s.in_hat ? "yes" : "no";
+  const why = s.reason_text
+    ? `<p class="hat-why"><span class="hat-why-label">Why ${infoTip("Why", "The most likely reason this name is not in this minute’s draw.")}</span> ${esc(s.reason_text)}</p>`
+    : "";
+  const beat = s.last_heartbeat
+    ? `${esc(timeAgo(s.last_heartbeat))} <span class="faint">${esc(fmtTime(s.last_heartbeat))}</span>`
+    : "No heartbeat seen yet";
+  const draws = s.recent_draws || [];
+  const nodes = s.nodes || [];
+  const luck = s.luck || {};
+  return `<section class="hat-panel" aria-label="Hat stats">
+    <div class="card" style="margin-top:16px">
+      <h2>Hat stats ${infoTip("Hat stats", "How often this name was in the minute draw, and how that compares with a fair random draw. Every node this name has used is counted together.")}</h2>
+      <p class="muted">Each minute is one random draw. A win is about 5,000 XFER. These numbers add up every node this name has used.</p>
+      <div class="grid stats">
+        <div class="card stat"><span>In the hat now ${infoTip("In the hat now", "Yes means this name is in the current minute’s draw and can win it. No means it is sitting out this minute.")}</span><b>${inHat}</b></div>
+        <div class="card stat"><span>Last heartbeat ${infoTip("Last heartbeat", "The last time this name’s app checked in. A check-in has to be within about 3 minutes to count.")}</span><b class="hat-beat">${beat}</b></div>
+        <div class="card stat"><span>Draws, last 24 hours ${infoTip("Draws, last 24 hours", "How many minute draws this name was in during the last 24 hours, out of all draws in that time.")}</span><b>${(s.draws_24h || 0).toLocaleString()} <span class="hat-of">of ${(s.draws_24h_total || 0).toLocaleString()}</span></b></div>
+        <div class="card stat"><span>Draws, all time ${infoTip("Draws, all time", "How many minute draws this name has ever been in. Every node this name has used is counted together.")}</span><b>${(s.draws_all || 0).toLocaleString()}</b></div>
+        <div class="card stat"><span>Share since joining ${infoTip("Share since joining", "Of all the minute draws since this name first joined, the share it was actually in.")}</span><b>${fmtShare(s.included_percent)}</b></div>
+        <div class="card stat"><span>Wins ${infoTip("Wins", "How many times the draw paid this name.")}</span><b>${(s.wins || 0).toLocaleString()}</b></div>
+        <div class="card stat"><span>XFER won ${infoTip("XFER won", "Coins the draw paid to this name. Right now a win is about 5,000 XFER, plus any fees in that block.")}</span><b>${atomsToXfer(s.earned || 0)}</b></div>
+        <div class="card stat"><span>Expected wins ${infoTip("Expected wins", "The fair share if every draw is random. Add up 1 divided by the number of people in each draw this name was in. The actual wins are next to this.")}</span><b>${fmtExpected(s.expected_wins)} <span class="hat-of">actual ${(s.wins || 0).toLocaleString()}</span></b></div>
+      </div>
+      ${why}
+      <p class="luck-note ${esc(luck.tone || "none")}">${esc(luck.text || "Each draw is random.")} ${infoTip("Luck", "A plain comparison of actual wins with the fair share. The draw is random, so a high or low result can happen to anyone.")}</p>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Recent draws ${infoTip("Recent draws", "The latest minutes. A mark shows when this name was in that draw, and who was paid.")}</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Block</th>
+            <th class="hide-sm">When ${infoTip("When", "How long ago that minute was.")}</th>
+            <th>Hat size ${infoTip("Hat size", "How many nodes were in that minute’s draw.")}</th>
+            <th>In this draw ${infoTip("In this draw", "Yes if any node belonging to this name was in that minute’s draw.")}</th>
+            <th>Winner ${infoTip("Winner", "The name the draw paid that minute.")}</th>
+          </tr></thead>
+          <tbody>
+            ${draws.map((d) => `<tr class="${d.won ? "row-won" : (d.in_hat ? "row-in" : "")}">
+              <td>${linkBlock(d.height)}</td>
+              <td class="hide-sm">${d.time ? esc(timeAgo(d.time)) : "—"}</td>
+              <td>${d.hat_size ?? "—"}</td>
+              <td>${d.in_hat ? "yes" : "no"}${d.won ? ` <span class="badge lottery">won</span>` : ""}</td>
+              <td>${d.winner ? handle(d.winner) : "—"}</td>
+            </tr>`).join("") || `<tr><td colspan="5" class="empty">No draws yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Nodes and payout addresses ${infoTip("Nodes and payout addresses", "The nodes this name has used, and the addresses that were paid. A name can change nodes over time. Stats add them all together.")}</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th>Node ${infoTip("Node", "The id of a node this name has used. Older nodes stay in the list.")}</th>
+            <th>Payout address ${infoTip("Payout address", "An address that received this node’s draw payments, or the address the node checks in with.")}</th>
+            <th>Draws ${infoTip("Draws", "How many minute draws this node was in.")}</th>
+            <th>Wins ${infoTip("Wins for this node", "How many times the draw paid this node.")}</th>
+            <th class="hide-sm">Last seen ${infoTip("Last seen", "The last time this node checked in.")}</th>
+          </tr></thead>
+          <tbody>
+            ${nodes.map((n) => `<tr>
+              <td>${idHtml(n.node_id)}</td>
+              <td>${(n.addresses || []).map((a) => `<div>${linkAddr(a)}</div>`).join("") || "—"}</td>
+              <td>${(n.draws || 0).toLocaleString()}</td>
+              <td>${(n.wins || 0).toLocaleString()}</td>
+              <td class="hide-sm">${n.last_seen ? esc(timeAgo(n.last_seen)) : "—"}</td>
+            </tr>`).join("") || `<tr><td colspan="5" class="empty">No nodes linked to this name yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>`;
+}
+
 async function pageIdentity(handleName) {
-  const p = await api("/handle/" + encodeURIComponent(handleName));
+  const [p, hat] = await Promise.all([
+    api("/handle/" + encodeURIComponent(handleName)),
+    api("/handle/" + encodeURIComponent(handleName) + "/hat-stats").catch(() => null),
+  ]);
   const name = p.handle || handleName;
   app.innerHTML = `
     <p class="crumb"><a href="${membersHash("all", "")}">Members</a> / @${esc(name)}</p>
@@ -1627,6 +1786,7 @@ async function pageIdentity(handleName) {
       <div class="card stat"><span>Earned</span><b>${atomsToXfer(p.earned || 0)}</b></div>
       <div class="card stat"><span>Hat blocks</span><b>${p.hat_blocks || 0}</b></div>
     </div>
+    ${hatStatsHtml(hat)}
     <div class="card" style="margin-top:16px">
       <h2>Identity</h2>
       <div class="kv">

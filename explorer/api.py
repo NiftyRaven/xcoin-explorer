@@ -19,6 +19,7 @@ from explorer.chain import (
     SUBUNIT,
     TICKER,
 )
+from explorer.hatstats import attach_live_status, compute_hat_stats
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.links import MAX_BATCH, AddressLinks, addresses_in, tx_sighash_all
 from explorer.queries import Queries, norm_handle, page_offset, paginate
@@ -83,6 +84,32 @@ def live_lottery_handles(queries: Queries, indexer, rpc) -> tuple[list[str], lis
     return hat, heartbeat, live if isinstance(live, dict) else None
 
 
+def live_node_details(indexer, rpc) -> list[dict]:
+    """Heartbeats the connected wallet can see, including the attested flag."""
+    extra: list[dict] = []
+    if rpc.connected:
+        extra = _as_node_list(rpc.try_call("getactivenodes", default=None))
+    if not extra:
+        extra = _as_node_list(indexer.live_nodes())
+    out: list[dict] = []
+    for node in extra:
+        last = node.get("lastseen")
+        try:
+            last_seen = int(last) if last is not None else None
+        except (TypeError, ValueError):
+            last_seen = None
+        attested = node.get("attested")
+        out.append(
+            {
+                "id": (node.get("id") or "").lower(),
+                "handle": norm_handle(node.get("xaccount")),
+                "lastseen": last_seen,
+                "attested": attested if isinstance(attested, bool) else None,
+            }
+        )
+    return out
+
+
 def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | None = None, links: AddressLinks | None = None, relay_trades=None) -> FastAPI:
     app = FastAPI(title="X Coin Explorer", version=__version__)
     app.state.queries = queries
@@ -109,6 +136,7 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
         data["labels"] = links.labels(addresses_in(data) | set(extra))
         return data
     app.state.stats_cache = StaleWhileRefreshCache()
+    app.state.hat_cache = StaleWhileRefreshCache(max_keys=256)
 
     if WEB.exists():
         app.mount("/static", StaticFiles(directory=str(WEB)), name="static")
@@ -341,6 +369,27 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
             return JSONResponse({"error": "invalid handle"}, status_code=400)
         profile["addresses"] = queries.handle_addresses(name)
         return labeled(profile)
+
+    @app.get("/api/handle/{name}/hat-stats")
+    def handle_hat_stats(name: str):
+        """Draw history for one handle, merged across every node id it has used."""
+        handle = norm_handle(name)
+        height = queries.db.indexed_height()
+        hist = app.state.hat_cache.get(
+            ("hat", handle, height),
+            lambda: compute_hat_stats(queries.db, handle),
+        )
+        if hist is None:
+            return JSONResponse({"error": "invalid handle"}, status_code=400)
+        hat, heartbeat, live = live_lottery_handles(queries, indexer, rpc)
+        body = attach_live_status(
+            hist,
+            hat_handles=set(hat),
+            heartbeat_handles=set(heartbeat),
+            nodes=live_node_details(indexer, rpc),
+            live=live,
+        )
+        return labeled(body)
 
     @app.get("/api/stats")
     def stats(pulse: int = 180):

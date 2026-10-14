@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS lottery_active (
     n INTEGER DEFAULT 0,
     PRIMARY KEY (height, node_id)
 );
+CREATE INDEX IF NOT EXISTS idx_active_xaccount ON lottery_active(xaccount);
 
 CREATE TABLE IF NOT EXISTS assets (
     name TEXT PRIMARY KEY,
@@ -427,6 +428,9 @@ class Database:
             self.conn.execute("ALTER TABLE lottery_active ADD COLUMN xaccount TEXT")
         if "n" not in cols:
             self.conn.execute("ALTER TABLE lottery_active ADD COLUMN n INTEGER DEFAULT 0")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_xaccount ON lottery_active(xaccount)"
+        )
         io_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(txio)")}
         if "op_return" not in io_cols:
             self.conn.execute("ALTER TABLE txio ADD COLUMN op_return TEXT")
