@@ -210,6 +210,19 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
             return JSONResponse({"error": "block not found"}, status_code=404)
         return labeled(b)
 
+    def _attach_launch_trade(payload: dict, txid: str, network_fee: int | None) -> None:
+        """Public Launch fill for this payment or delivery. Misses stay off the page."""
+        relay = getattr(app.state.trades, "relay", None)
+        lookup = getattr(relay, "launch_fill", None)
+        if not lookup:
+            return
+        try:
+            found = lookup(txid, network_fee_atoms=network_fee)
+        except Exception:
+            return
+        if found:
+            payload["launch_trade"] = found
+
     @app.get("/api/tx/{txid}")
     def tx(txid: str):
         t = queries.tx(txid)
@@ -222,9 +235,16 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
                     view["sighash_all"] = tx_sighash_all(raw)
                     links.observe_tx(view)
                     payload["parties"] = _party_addresses(view)
+                _attach_launch_trade(payload, str(raw.get("txid") or txid), None)
                 return labeled(payload)
         if not t:
             return JSONResponse({"error": "transaction not found"}, status_code=404)
+        fee = t.get("fee")
+        try:
+            network_fee = int(fee) if fee is not None else None
+        except (TypeError, ValueError):
+            network_fee = None
+        _attach_launch_trade(t, str(t.get("txid") or txid), network_fee)
         return labeled(t)
 
     @app.get("/api/address/{addr}")
