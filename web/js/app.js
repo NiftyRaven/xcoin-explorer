@@ -1094,6 +1094,42 @@ function rpcOutAddress(vout) {
   return addrs[0] || "";
 }
 
+function launchTradePanel(trade) {
+  if (!trade || (trade.role !== "payment" && trade.role !== "delivery")) return "";
+  const assetTip = "The asset named on the Launch fill.";
+  const amountTip = "How much of the asset this fill moved.";
+  if (trade.role === "delivery") {
+    return `<div class="card" style="margin-bottom:16px">
+      <h2>Launch trade ${infoTip("Launch trade", "This transaction moves the asset for a Launch trade. The buy or sell payment is a different transaction.")}</h2>
+      <p class="trade-sentence">${esc(trade.headline || "Asset transfer for Launch trade")}</p>
+      <div class="kv">
+        <b>Payment ${infoTip("Payment", "The Launch buy or sell that this transfer belongs to.")}</b><div>${linkTx(trade.payment_txid, { full: true })}</div>
+        <b>Asset ${infoTip("Asset", assetTip)}</b><div>${linkAsset(trade.asset)}</div>
+        <b>Amount ${infoTip("Amount", amountTip)}</b><div>${esc(trade.amount || "—")}</div>
+      </div>
+    </div>`;
+  }
+  const delivery = trade.delivery_txid
+    ? linkTx(trade.delivery_txid, { full: true })
+    : (trade.delivering ? `<span class="faint">Delivering…</span>` : "");
+  const deliveryRow = delivery
+    ? `<b>Delivery ${infoTip("Delivery", "The market wallet transaction that moves the asset. Delivering means that transaction is not listed yet.")}</b><div>${delivery}</div>`
+    : "";
+  return `<div class="card" style="margin-bottom:16px">
+    <h2>Launch trade ${infoTip("Launch trade", "A Launch buy or sell uses two transactions: this payment, and a later move of the asset by the market wallet.")}</h2>
+    <p class="trade-sentence">${esc(trade.headline || "")}</p>
+    <div class="kv">
+      <b>Asset ${infoTip("Asset", assetTip)}</b><div>${linkAsset(trade.asset)}</div>
+      <b>Amount ${infoTip("Amount", amountTip)}</b><div>${esc(trade.amount || "—")}</div>
+      <b>Price ${infoTip("Price", "XFER for one whole unit on this fill.")}</b><div>${esc(trade.price || "—")}</div>
+      <b>Market fee ${infoTip("Market fee", "The Launch market fee on this fill.")}</b><div>${esc(trade.market_fee || "—")}</div>
+      <b>Network fee ${infoTip("Network fee", "The chain fee for this payment.")}</b><div>${esc(trade.network_fee || "—")}</div>
+      <b>Creator fee ${infoTip("Creator fee", "The listing fee on this fill. It is separate from the market fee and the chain fee.")}</b><div>${esc(trade.creator_fee || "—")}</div>
+      ${deliveryRow}
+    </div>
+  </div>`;
+}
+
 async function pageTx(id) {
   const t = await api("/tx/" + encodeURIComponent(id));
   if (t.unindexed) {
@@ -1116,6 +1152,7 @@ async function pageTx(id) {
       <p class="id-hero">${copyable(txid)}</p>
       <p class="sub">The node has this transaction. The explorer index does not, yet.</p>
       ${rpcReceipt(rpc)}
+      ${launchTradePanel(t.launch_trade)}
       ${chainDetail(`<div class="io">
         <div class="card"><h2>Inputs</h2>${vin || `<div class="empty">No inputs.</div>`}</div>
         <div class="arrow">→</div>
@@ -1133,6 +1170,7 @@ async function pageTx(id) {
     <h1 class="page-title">Transaction</h1>
     <p class="id-hero">${copyable(t.txid)}</p>
     ${indexedReceipt(t)}
+    ${launchTradePanel(t.launch_trade)}
     ${chainDetail(`
     <div class="card" style="margin-bottom:16px">
       <div class="kv">
