@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from explorer.api import create_app
 from explorer.db import Database
+import explorer.eligibility as el
 from explorer.eligibility import FIX_VPN, HEARTBEAT_LIMIT_SECONDS, assemble
 from explorer.indexer import Indexer
 from explorer.queries import Queries
@@ -293,10 +294,32 @@ def test_copy_avoids_promises_and_keeps_the_help_link():
     assert "Check my eligibility" in js
     assert "VPN / firewall setup" in js
     assert "38443" in js
-    assert "Split-tunnel the wallet" in js
-    assert "one wallet per handle" in js.lower() or "Keep one wallet per handle." in js
+    assert "Keep the VPN on." in js
+    assert "P2P-friendly" in js
+    assert "No auto IP rotation or server hopping." in js
+    assert "Enable auto-reconnect." in js
+    assert "Keep one wallet per handle." in js
     assert "Keep the PC awake." in js
     assert "synced to the tip" in js
+    setup_l = setup.lower()
+    py_l = py.lower()
+    for banned in ("split-tunnel", "split tunnel", "exclude the wallet", "exclude it from"):
+        assert banned not in setup_l
+        assert banned not in py_l
+    for name in dir(el):
+        if not name.startswith("FIX_"):
+            continue
+        text = getattr(el, name).lower()
+        assert "split-tunnel" not in text and "split tunnel" not in text
+        assert "exclude" not in text
+    assert "Keep the VPN on." in FIX_VPN
+    assert "38443" in FIX_VPN
+    assert "P2P-friendly" in FIX_VPN
+    assert "auto-reconnect" in FIX_VPN
+    assert "server hopping" in FIX_VPN
+    assert "one wallet per handle" in FIX_VPN
+    assert "PC awake" in FIX_VPN
+    assert "synced to the tip" in FIX_VPN
     assert "normally shows 0" in js
     assert "Where wins are paid." in js
     assert "infoTip(" in panel

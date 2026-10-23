@@ -15,8 +15,9 @@ HEARTBEAT_LIMIT_SECONDS = 180
 _CONTINUED_SECONDS = 90
 
 FIX_VPN = (
-    "Heartbeats arriving but not counted: often a VPN or a second wallet. "
-    "Run one wallet; allow outbound TCP 38443 or split-tunnel the wallet."
+    "Keep the VPN on. Choose one stable P2P-friendly server that allows outbound TCP 38443, "
+    "with no auto IP rotation or server hopping, and enable auto-reconnect. "
+    "Run one wallet per handle, keep the PC awake, and keep the wallet synced to the tip."
 )
 FIX_HEARTBEAT = (
     "Open one wallet and leave the PC awake. A check-in older than 180 seconds does not count."

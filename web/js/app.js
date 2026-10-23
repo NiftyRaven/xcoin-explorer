@@ -1901,13 +1901,15 @@ function setupHtml() {
   return `<section class="card" aria-label="VPN / firewall setup">
     <p class="crumb"><a href="#/members">Members</a> / VPN / firewall setup</p>
     <h1 class="page-title">VPN / firewall setup</h1>
-    <p class="sub">A check-in has to reach the network within 180 seconds, from one wallet, on a machine that is awake and synced to the tip.</p>
+    <p class="sub">Keep the VPN on. A check-in has to leave on outbound TCP 38443 within 180 seconds, from one wallet, on a machine that is awake and synced to the tip.</p>
     <ul class="help-list">
-      ${item("Outbound TCP 38443", "The wallet talks to other nodes on this port. Inbound is optional.", "Allow outbound TCP 38443.")}
-      ${item("VPN", "A VPN can hide the wallet’s check-ins even while the app looks connected.", "Split-tunnel the wallet, or exclude the wallet app from the VPN.")}
-      ${item("One wallet", "One handle maps to one live node. A second wallet can replace it or leave check-ins uncounted.", "Keep one wallet per handle.")}
+      ${item("Keep the VPN on", "Leave the VPN connected while the wallet runs.", "Keep the VPN on.")}
+      ${item("Outbound TCP 38443", "The wallet reaches other nodes on this port. The server has to allow that traffic.", "Choose a VPN server that allows outbound TCP 38443 (P2P-friendly).")}
+      ${item("One stable server", "A new address every few minutes stops check-ins from counting.", "Stick to one stable server. No auto IP rotation or server hopping.")}
+      ${item("Auto-reconnect", "If the link drops, it should come back on that same server.", "Enable auto-reconnect.")}
+      ${item("One wallet", "One handle maps to one live node. A second wallet can leave check-ins uncounted.", "Keep one wallet per handle.")}
       ${item("Stay awake", "Sleep stops check-ins. After 180 seconds the name leaves the draw.", "Keep the PC awake.")}
-      ${item("Synced to the tip", "A wallet that is still catching up is not in the draw.", "Make sure the wallet is synced to the tip.")}
+      ${item("Synced to the tip", "A wallet that is still catching up is not in the draw.", "Keep the wallet synced to the tip.")}
     </ul>
     <p class="elig-help"><a href="#/members">Check my eligibility</a></p>
   </section>`;
