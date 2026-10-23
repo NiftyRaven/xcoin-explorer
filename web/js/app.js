@@ -1704,9 +1704,10 @@ function clampPage(total, state, key = "page") {
   return true;
 }
 
-function membersHash(scope, q) {
+function membersHash(scope, q, check) {
   const size = pageState(hashQuery()).size;
-  return withParams("#/members", { scope: scope === "eligible" ? "" : scope, q, size });
+  const current = check === undefined ? (hashQuery().get("check") || "") : check;
+  return withParams("#/members", { scope: scope === "eligible" ? "" : scope, q, check: current, size });
 }
 
 function memberStatusBadges(m) {
@@ -1808,16 +1809,130 @@ function hatStatsHtml(s) {
   </section>`;
 }
 
+const IDENTITY_ADDR_TIP = "The identity address normally shows 0. Wins are paid to the payout address.";
+const PAYOUT_ADDR_TIP = "Where wins are paid.";
+
+function eligibilityMark(ok) {
+  if (ok === true) return "yes";
+  if (ok === false) return "no";
+  return "unknown";
+}
+
+function eligibilityAddress(label, tip, addr) {
+  const body = addr ? linkAddr(addr, { full: true }) : `<span class="faint">—</span>`;
+  return `<div class="elig-addr"><span>${esc(label)} ${infoTip(label, tip)}</span>${body}</div>`;
+}
+
+function eligibilityHtml(data, queryValue) {
+  const value = queryValue || "";
+  const form = `<form class="search" id="elig-search">
+      <input id="elig-q" type="search" value="${esc(value)}" placeholder="Search @handle or address" autocomplete="off" />
+      <button type="submit">Check</button>
+    </form>`;
+  if (!data) {
+    return `<section class="card elig-panel" aria-label="Check my eligibility">
+      <h2>Check my eligibility ${infoTip("Check my eligibility", "A checklist for one name: the hat, the 180 second check-in limit, the last hat block, the blue check when this node has it, a second wallet when one is visible, and the registered node.")}</h2>
+      <p class="muted">Search an @handle or an address. Each failing line has one fix. A line marked likely is an inference, because the node does not say why a check-in was left out.</p>
+      ${form}
+      <p class="elig-help"><a href="#/setup">VPN / firewall setup</a></p>
+    </section>`;
+  }
+  if (data.error) {
+    return `<section class="card elig-panel" aria-label="Check my eligibility">
+      <h2>Check my eligibility ${infoTip("Check my eligibility", "A checklist for one name.")}</h2>
+      ${form}
+      <p class="err">${esc(data.error)}</p>
+      <p class="elig-help"><a href="#/setup">VPN / firewall setup</a></p>
+    </section>`;
+  }
+  const checks = data.checks || [];
+  const rows = checks.map((c) => {
+    const state = c.ok === true ? "ok" : c.ok === false ? "bad" : "unknown";
+    const likely = c.likely ? ` <span class="badge">likely</span>` : "";
+    const fix = c.ok === false && c.fix ? `<p class="elig-fix">Fix: ${esc(c.fix)}</p>` : "";
+    return `<li class="elig-item ${state}">
+      <div class="elig-mark">${eligibilityMark(c.ok)}</div>
+      <div>
+        <strong>${esc(c.label)} ${infoTip(c.label, c.tip || "")}</strong>
+        <p>${esc(c.detail)}${likely}</p>
+        ${fix}
+      </div>
+    </li>`;
+  }).join("");
+  const who = data.handle ? `<p class="elig-who">@${esc(data.handle)}</p>` : "";
+  return `<section class="card elig-panel" aria-label="Check my eligibility">
+    <h2>Check my eligibility ${infoTip("Check my eligibility", "A checklist for one name. The node does not report why a check-in was dropped, so a line marked likely is the strongest reading of the blocks and check-ins this explorer can see.")}</h2>
+    ${form}
+    ${who}
+    <p class="elig-summary">${esc(data.summary || "")}</p>
+    <div class="elig-addrs">
+      ${eligibilityAddress("Identity address", IDENTITY_ADDR_TIP, data.identity_address)}
+      ${eligibilityAddress("Payout address", PAYOUT_ADDR_TIP, data.payout_address)}
+    </div>
+    <ul class="elig-list">${rows}</ul>
+    <p class="muted elig-note">${esc(data.note || "")}</p>
+    <p class="elig-help"><a href="#/setup">VPN / firewall setup</a></p>
+  </section>`;
+}
+
+function bindEligibilitySearch(fallback) {
+  const form = $("#elig-search");
+  if (!form) return;
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const value = ($("#elig-q") && $("#elig-q").value.trim()) || "";
+    if (!value) {
+      location.hash = fallback || "#/members";
+      return;
+    }
+    const bare = value.replace(/^@/, "").trim().toLowerCase();
+    const handleLike = /^[a-z0-9_]{1,32}$/.test(bare);
+    const addressLike = /^[Xx][1-9A-HJ-NP-Za-km-z]{20,}$/.test(value.trim());
+    if (handleLike && !addressLike) {
+      location.hash = "#/identity/" + encodeURIComponent(bare);
+      return;
+    }
+    location.hash = withParams("#/members", { check: value });
+  });
+}
+
+function setupHtml() {
+  const item = (label, tip, text) => `<li><strong>${esc(label)} ${infoTip(label, tip)}</strong> ${esc(text)}</li>`;
+  return `<section class="card" aria-label="VPN / firewall setup">
+    <p class="crumb"><a href="#/members">Members</a> / VPN / firewall setup</p>
+    <h1 class="page-title">VPN / firewall setup</h1>
+    <p class="sub">Keep the VPN on. A check-in has to leave on outbound TCP 38443 within 180 seconds, from one wallet, on a machine that is awake and synced to the tip.</p>
+    <ul class="help-list">
+      ${item("Keep the VPN on", "Leave the VPN connected while the wallet runs.", "Keep the VPN on.")}
+      ${item("Outbound TCP 38443", "The wallet reaches other nodes on this port. The server has to allow that traffic.", "Choose a VPN server that allows outbound TCP 38443 (P2P-friendly).")}
+      ${item("One stable server", "A new address every few minutes stops check-ins from counting.", "Stick to one stable server. No auto IP rotation or server hopping.")}
+      ${item("Auto-reconnect", "If the link drops, it should come back on that same server.", "Enable auto-reconnect.")}
+      ${item("One wallet", "One handle maps to one live node. A second wallet can leave check-ins uncounted.", "Keep one wallet per handle.")}
+      ${item("Stay awake", "Sleep stops check-ins. After 180 seconds the name leaves the draw.", "Keep the PC awake.")}
+      ${item("Synced to the tip", "A wallet that is still catching up is not in the draw.", "Keep the wallet synced to the tip.")}
+    </ul>
+    <p class="elig-help"><a href="#/members">Check my eligibility</a></p>
+  </section>`;
+}
+
+async function pageSetup() {
+  app.innerHTML = setupHtml();
+}
+
 async function pageIdentity(handleName) {
-  const [p, hat] = await Promise.all([
+  const [p, hat, elig] = await Promise.all([
     api("/handle/" + encodeURIComponent(handleName)),
     api("/handle/" + encodeURIComponent(handleName) + "/hat-stats").catch(() => null),
+    api("/eligibility?q=" + encodeURIComponent("@" + handleName)).catch((err) => ({ error: err.message || "Eligibility could not be loaded." })),
   ]);
   const name = p.handle || handleName;
+  const identAddr = (elig && elig.identity_address) || p.identity_address || null;
+  const payAddr = (elig && elig.payout_address) || p.payout_address || null;
   app.innerHTML = `
-    <p class="crumb"><a href="${membersHash("all", "")}">Members</a> / @${esc(name)}</p>
+    <p class="crumb"><a href="${membersHash("all", "", "")}">Members</a> / @${esc(name)}</p>
     <h1 class="page-title">@${esc(name)}</h1>
     <p class="sub">${p.found ? "The @handle is the lottery identity. Payout addresses change. Guest shares are later sends from a mature win. Guests are not in the hat." : "This handle is not in the hat, the live eligible set, or any guest share yet."}</p>
+    ${eligibilityHtml(elig, "@" + name)}
     <div class="grid stats">
       <div class="card stat"><span>Now</span><b>${p.eligible ? "eligible" : "offline"}</b></div>
       <div class="card stat"><span>Wins</span><b>${p.wins || 0}</b></div>
@@ -1831,7 +1946,8 @@ async function pageIdentity(handleName) {
         <b>Handle</b><div>${handle(name)} ${memberStatusBadges(p)}</div>
         <b>In this minute’s hat</b><div>${yesNo(p.in_hat)}</div>
         <b>Heartbeat</b><div>${yesNo(p.heartbeat)}</div>
-        <b>Address</b><div>${p.address ? linkAddr(p.address, { full: true }) : `<span class="faint">—</span>`}</div>
+        <b>Identity address ${infoTip("Identity address", IDENTITY_ADDR_TIP)}</b><div>${identAddr ? linkAddr(identAddr, { full: true }) : `<span class="faint">—</span>`}</div>
+        <b>Payout address ${infoTip("Payout address", PAYOUT_ADDR_TIP)}</b><div>${payAddr ? linkAddr(payAddr, { full: true }) : `<span class="faint">—</span>`}</div>
         <b>Asset root</b><div>${p.asset ? linkAsset(p.asset) : `<span class="faint">—</span>`}</div>
         <b>All addresses</b><div>${(p.addresses || []).map((row) => `<div title="${esc(labelHint({ handle: name, proof: row.proof, detail: row.detail }))}">${linkAddr(row.address)} <span class="faint">${esc(PROOF_NAMES[row.proof] || row.proof)}</span></div>`).join("") || `<span class="faint">—</span>`}</div>
         <b>First hat</b><div>${p.first_hat != null ? linkBlock(p.first_hat) : "—"}</div>
@@ -1881,20 +1997,28 @@ async function pageIdentity(handleName) {
         </table>
       </div>
     </div>`;
+  bindEligibilitySearch("#/members");
 }
 
 async function pageMembers() {
   const params = hashQuery();
   const q = (params.get("q") || "").trim();
+  const check = (params.get("check") || "").trim();
   const scope = params.get("scope") === "all" ? "all" : "eligible";
   const state = pageState(params);
-  const data = await api(`/lottery/members?q=${encodeURIComponent(q)}&scope=${scope}&limit=${state.size}&offset=${state.offset}`);
+  const [data, elig] = await Promise.all([
+    api(`/lottery/members?q=${encodeURIComponent(q)}&scope=${scope}&limit=${state.size}&offset=${state.offset}`),
+    check
+      ? api(`/eligibility?q=${encodeURIComponent(check)}`).catch((err) => ({ error: err.message || "Eligibility could not be loaded." }))
+      : Promise.resolve(null),
+  ]);
   if (clampPage(data.total || 0, state)) return;
   const items = data.items || [];
   app.innerHTML = `
     <h1 class="page-title">Eligible members</h1>
     <p class="sub">X Verified <code>@handles</code> in this minute’s hat, or with a live heartbeat. Search also finds handles that were eligible before and are offline now.</p>
-    <div class="card">
+    ${eligibilityHtml(elig, check)}
+    <div class="card" style="margin-top:16px">
       <div class="toolbar">
         <form class="search" id="member-search">
           <input id="member-q" type="search" value="${esc(q)}" placeholder="Search @handle" autocomplete="off" />
@@ -1906,31 +2030,44 @@ async function pageMembers() {
         </div>
       </div>
       <p class="member-meta">${(data.total || 0).toLocaleString()} ${data.total === 1 ? "handle" : "handles"}${q ? ` for “${esc(q)}”` : ""} · ${scope === "eligible" ? "live eligible only" : "every indexed handle"}</p>
+      <div class="table-scroll">
       <table class="click-rows">
-        <thead><tr><th>Handle</th><th>Now</th><th>Wins</th><th>Earned</th><th>Last hat</th></tr></thead>
+        <thead><tr>
+          <th>Handle</th>
+          <th>Now</th>
+          <th>Identity address ${infoTip("Identity address", IDENTITY_ADDR_TIP)}</th>
+          <th>Payout address ${infoTip("Payout address", PAYOUT_ADDR_TIP)}</th>
+          <th>Wins</th>
+          <th>Earned</th>
+          <th>Last hat</th>
+        </tr></thead>
         <tbody>
           ${items.map((m) => `<tr data-href="#/identity/${encodeURIComponent(m.handle)}">
             <td>${handle(m.handle)}</td>
             <td>${memberStatusBadges(m)}</td>
+            <td>${m.identity_address ? linkAddr(m.identity_address) : "—"}</td>
+            <td>${m.payout_address ? linkAddr(m.payout_address) : "—"}</td>
             <td>${m.wins || 0}</td>
             <td>${atomsToXfer(m.earned || 0)}</td>
             <td>${m.last_hat != null ? linkBlock(m.last_hat) : "—"}</td>
-          </tr>`).join("") || `<tr><td colspan="5" class="empty">${q ? "No handle matches that search." : (scope === "eligible" ? "No one is eligible this minute. Try All handles." : "No handles indexed yet.")}</td></tr>`}
+          </tr>`).join("") || `<tr><td colspan="7" class="empty">${q ? "No handle matches that search." : (scope === "eligible" ? "No one is eligible this minute. Try All handles." : "No handles indexed yet.")}</td></tr>`}
         </tbody>
       </table>
+      </div>
       ${pagerHtml("members-pager", data.total || 0, state)}
     </div>`;
   bindPagers();
+  bindEligibilitySearch(membersHash(scope, q, ""));
   const form = $("#member-search");
   if (form) {
     form.addEventListener("submit", (e) => {
       e.preventDefault();
-      location.hash = membersHash(scope, $("#member-q").value.trim());
+      location.hash = membersHash(scope, $("#member-q").value.trim(), check);
     });
   }
   document.querySelectorAll("#member-tabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
-      location.hash = membersHash(btn.getAttribute("data-scope"), ($("#member-q") && $("#member-q").value.trim()) || q);
+      location.hash = membersHash(btn.getAttribute("data-scope"), ($("#member-q") && $("#member-q").value.trim()) || q, check);
     });
   });
 }
@@ -2217,8 +2354,9 @@ const routes = [
   [/^#\/address\/([^?]+)(?:\?.*)?$/, (m) => pageAddress(decodeURIComponent(m[1]))],
   [/^#\/assets(?:\?.*)?$/, pageAssets],
   [/^#\/asset\/([^?]+)(?:\?.*)?$/, (m) => pageAsset(decodeURIComponent(m[1]))],
-  [/^#\/identity\/(.+)$/, (m) => pageIdentity(decodeURIComponent(m[1]))],
+  [/^#\/identity\/([^?]+)(?:\?.*)?$/, (m) => pageIdentity(decodeURIComponent(m[1]))],
   [/^#\/members(?:\?.*)?$/, pageMembers],
+  [/^#\/setup(?:\?.*)?$/, pageSetup],
   [/^#\/lottery$/, pageLottery],
   [/^#\/stats$/, pageStats],
   [/^#\/rich(?:\?.*)?$/, pageRich],

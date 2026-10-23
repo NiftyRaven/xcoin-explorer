@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #07080d;
   --bg2: #0c0f16;
   --panel: #11151f;
@@ -619,4 +620,61 @@ th .info-pop, .stat .info-pop { font-size: 13px; }
     width: auto;
   }
   .hat-panel .stat b { font-size: 16px; }
+}
+
+/* Eligibility checklist. Colors come from the theme tokens so light and dark stay in step. */
+.elig-panel { margin-top: 16px; }
+.elig-panel .search { margin: 12px 0; max-width: 520px; }
+.elig-who { margin: 0 0 4px; font-weight: 600; }
+.elig-summary { margin: 0 0 12px; line-height: 1.45; }
+.elig-addrs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.elig-addr { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.elig-addr > span { color: var(--muted); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+.elig-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.elig-item {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel2);
+}
+.elig-mark { font-weight: 600; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.elig-item.ok .elig-mark { color: var(--green); }
+.elig-item.bad .elig-mark { color: var(--red); }
+.elig-item.unknown .elig-mark { color: var(--gold); }
+.elig-item p { margin: 4px 0 0; line-height: 1.45; }
+.elig-fix {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 3px solid var(--gold);
+}
+.elig-note { margin-top: 12px; }
+.elig-help { margin: 12px 0 0; }
+.help-list { margin: 12px 0 0; padding-left: 18px; }
+.help-list li { margin: 10px 0; line-height: 1.45; }
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f4f6fb;
+    --bg2: #e7edf6;
+    --panel: #ffffff;
+    --panel2: #f6f8fc;
+    --line: #d5ddea;
+    --text: #152033;
+    --muted: #52627a;
+    --faint: #6d7c92;
+    --blue: #1d5fd0;
+    --blue2: #184ea8;
+    --gold: #8a6410;
+    --gold2: #6d4e0c;
+    --green: #0d7a45;
+    --red: #c4233a;
+    --shadow: 0 12px 40px rgba(20, 32, 55, 0.08);
+  }
+  body { background-image: none; }
+  a:hover, .gw-chip:hover { color: #0b2e6b; }
+  tr:hover td { background: rgba(21, 32, 51, 0.04); }
 }

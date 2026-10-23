@@ -17,6 +17,8 @@ from explorer.chain import (
 )
 from explorer.db import Database
 from explorer.decode import classify_search
+from explorer.eligibility import pick_subject
+from explorer.hatstats import valid_handle
 from explorer.ipfs import attach_ipfs_fields
 
 
@@ -584,6 +586,323 @@ class Queries:
         ).fetchall()
         return [row_to_dict(r) for r in rows]
 
+    def _latest_win_address_by_handle(self) -> dict[str, str]:
+        """Payout address on each handle's newest win."""
+        rows = self.db.conn.execute(
+            """
+            SELECT handle, address FROM (
+                SELECT lower(TRIM(xaccount)) AS handle, address, height, rank,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY lower(TRIM(xaccount))
+                           ORDER BY height DESC, rank ASC
+                       ) AS rn
+                FROM lottery_wins
+                WHERE height>=1
+                  AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+                  AND address IS NOT NULL AND TRIM(address)!=''
+            )
+            WHERE rn=1
+            """
+        ).fetchall()
+        return {norm_handle(r["handle"]): r["address"] for r in rows if norm_handle(r["handle"])}
+
+    def _remember_match(self, found: dict[str, dict], handle: str | None, via: str, height: int | None, node_id: str | None = None, address: str | None = None) -> None:
+        name = norm_handle(handle)
+        if not valid_handle(name):
+            return
+        row = found.setdefault(
+            name,
+            {"handle": name, "via": via, "height": int(height or 0), "node_id": node_id, "address": address},
+        )
+        rank_now = {"payout": 0, "identity": 1, "node": 2, "node_id": 2, "link": 3}.get(row["via"], 9)
+        rank_new = {"payout": 0, "identity": 1, "node": 2, "node_id": 2, "link": 3}.get(via, 9)
+        if rank_new < rank_now or (rank_new == rank_now and int(height or 0) >= int(row.get("height") or 0)):
+            row["via"] = via
+            row["height"] = int(height or 0)
+            if node_id:
+                row["node_id"] = node_id
+            if address:
+                row["address"] = address
+
+    def handles_for_address(self, address: str) -> list[dict]:
+        """Handles tied to an address: identity, win payout, heartbeat script, or a stored link."""
+        found: dict[str, dict] = {}
+        addr = (address or "").strip()
+        if not addr:
+            return []
+        for r in self.db.conn.execute(
+            "SELECT handle, first_height, node_id FROM identities WHERE address=?",
+            (addr,),
+        ).fetchall():
+            self._remember_match(found, r["handle"], "identity", r["first_height"], r["node_id"], addr)
+        for r in self.db.conn.execute(
+            """
+            SELECT xaccount, height, node_id FROM lottery_wins
+            WHERE address=? AND height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+            """,
+            (addr,),
+        ).fetchall():
+            self._remember_match(found, r["xaccount"], "payout", r["height"], r["node_id"], addr)
+        for r in self.db.conn.execute(
+            "SELECT xaccount, last_height, node_id FROM node_seen WHERE address=?",
+            (addr,),
+        ).fetchall():
+            self._remember_match(found, r["xaccount"], "node", r["last_height"], r["node_id"], addr)
+        has_links = self.db.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='address_links'"
+        ).fetchone()
+        if has_links:
+            for r in self.db.conn.execute(
+                "SELECT handle FROM address_links WHERE address=?",
+                (addr,),
+            ).fetchall():
+                self._remember_match(found, r["handle"], "link", 0, None, addr)
+        return sorted(found.values(), key=lambda row: (0 if row["via"] == "payout" else 1, -int(row["height"] or 0), row["handle"]))
+
+    def handles_for_node(self, node_id: str) -> list[dict]:
+        nid = (node_id or "").strip().lower()
+        if len(nid) != 40:
+            return []
+        found: dict[str, dict] = {}
+        for r in self.db.conn.execute(
+            "SELECT handle, first_height, address FROM identities WHERE lower(node_id)=?",
+            (nid,),
+        ).fetchall():
+            self._remember_match(found, r["handle"], "identity", r["first_height"], nid, r["address"])
+        for r in self.db.conn.execute(
+            """
+            SELECT xaccount, MAX(height) AS height FROM lottery_active
+            WHERE lower(node_id)=? AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+            GROUP BY lower(TRIM(xaccount))
+            """,
+            (nid,),
+        ).fetchall():
+            self._remember_match(found, r["xaccount"], "node_id", r["height"], nid, None)
+        for r in self.db.conn.execute(
+            """
+            SELECT xaccount, MAX(height) AS height, address FROM lottery_wins
+            WHERE lower(node_id)=? AND height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+            GROUP BY lower(TRIM(xaccount))
+            """,
+            (nid,),
+        ).fetchall():
+            self._remember_match(found, r["xaccount"], "payout", r["height"], nid, r["address"])
+        for r in self.db.conn.execute(
+            "SELECT xaccount, last_height, address FROM node_seen WHERE lower(node_id)=?",
+            (nid,),
+        ).fetchall():
+            self._remember_match(found, r["xaccount"], "node", r["last_height"], nid, r["address"])
+        return list(found.values())
+
+    def resolve_eligibility_query(self, raw: str) -> dict:
+        """Turn an @handle, address, or node id into one subject handle."""
+        text = (raw or "").strip()
+        kind = classify_search(text)
+        if kind in ("handle", "query"):
+            handle = norm_handle(text)
+            if valid_handle(handle):
+                return {"ok": True, "handle": handle, "via": "handle", "matches": []}
+        if kind == "address":
+            matches = self.handles_for_address(text)
+            best = pick_subject(matches)
+            return {
+                "ok": True,
+                "handle": None if best is None else best["handle"],
+                "via": "address",
+                "address": text,
+                "matches": matches,
+            }
+        if kind == "node_id":
+            matches = self.handles_for_node(text)
+            best = pick_subject(matches)
+            return {
+                "ok": True,
+                "handle": None if best is None else best["handle"],
+                "via": "node_id",
+                "address": None,
+                "matches": matches,
+            }
+        return {"ok": False, "error": "not a handle or address"}
+
+    def eligibility_index(self, handle: str) -> dict | None:
+        """Indexed facts for one handle. Live heartbeats are added by the API."""
+        name = norm_handle(handle)
+        if not valid_handle(name):
+            return None
+        conn = self.db.conn
+        ident = conn.execute("SELECT * FROM identities WHERE handle=?", (name,)).fetchone()
+        seen_rows = conn.execute(
+            """
+            SELECT node_id, address, xaccount, last_seen, last_height FROM node_seen
+            WHERE lower(TRIM(xaccount))=?
+            """,
+            (name,),
+        ).fetchall()
+        last_hat_row = conn.execute(
+            """
+            SELECT MAX(height) AS h FROM lottery_active
+            WHERE lower(TRIM(xaccount))=?
+            """,
+            (name,),
+        ).fetchone()
+        last_hat = None if last_hat_row is None or last_hat_row["h"] is None else int(last_hat_row["h"])
+        win_count = conn.execute(
+            """
+            SELECT COUNT(*) AS c FROM lottery_wins
+            WHERE height>=1 AND lower(TRIM(xaccount))=?
+            """,
+            (name,),
+        ).fetchone()
+        wins = int(win_count["c"] or 0) if win_count else 0
+        node_ids: set[str] = set()
+        if ident is not None and ident["node_id"]:
+            node_ids.add(str(ident["node_id"]).lower())
+        last_seen = None
+        node_address = None
+        node_address_seen = None
+        for row in seen_rows:
+            nid = (row["node_id"] or "").lower()
+            if nid:
+                node_ids.add(nid)
+            stamp = row["last_seen"]
+            if isinstance(stamp, int) and (last_seen is None or stamp > last_seen):
+                last_seen = stamp
+            if row["address"] and (node_address_seen is None or (stamp or 0) >= node_address_seen):
+                node_address = row["address"]
+                node_address_seen = stamp or 0
+        for row in conn.execute(
+            """
+            SELECT DISTINCT lower(node_id) AS node_id FROM lottery_active
+            WHERE lower(TRIM(xaccount))=? AND node_id IS NOT NULL AND TRIM(node_id)!=''
+            """,
+            (name,),
+        ).fetchall():
+            if row["node_id"]:
+                node_ids.add(row["node_id"])
+        for row in conn.execute(
+            """
+            SELECT DISTINCT lower(node_id) AS node_id FROM lottery_wins
+            WHERE height>=1 AND lower(TRIM(xaccount))=? AND node_id IS NOT NULL AND TRIM(node_id)!=''
+            """,
+            (name,),
+        ).fetchall():
+            if row["node_id"]:
+                node_ids.add(row["node_id"])
+        latest_win = conn.execute(
+            """
+            SELECT address FROM lottery_wins
+            WHERE height>=1 AND lower(TRIM(xaccount))=?
+              AND address IS NOT NULL AND TRIM(address)!=''
+            ORDER BY height DESC, rank ASC
+            LIMIT 1
+            """,
+            (name,),
+        ).fetchone()
+        payout = (latest_win["address"] if latest_win else None) or node_address
+        others = self._other_handles(name, node_ids, payout)
+        tip = self.db.indexed_height()
+        tip_time = None
+        last_hat_time = None
+        if tip >= 0:
+            tip_row = conn.execute("SELECT time FROM blocks WHERE height=?", (tip,)).fetchone()
+            if tip_row is not None and tip_row["time"] is not None:
+                tip_time = int(tip_row["time"])
+        if last_hat is not None:
+            hat_row = conn.execute("SELECT time FROM blocks WHERE height=?", (last_hat,)).fetchone()
+            if hat_row is not None and hat_row["time"] is not None:
+                last_hat_time = int(hat_row["time"])
+        found = bool(ident or seen_rows or last_hat is not None or wins or node_ids)
+        return {
+            "handle": name,
+            "found": found,
+            "identity_address": None if ident is None else (ident["address"] or None),
+            "payout_address": payout,
+            "registered_node_id": None if ident is None or not ident["node_id"] else str(ident["node_id"]).lower(),
+            "node_ids": sorted(node_ids),
+            "last_seen": last_seen,
+            "last_hat": last_hat,
+            "last_hat_time": last_hat_time,
+            "ever_in_hat": bool(last_hat is not None or wins),
+            "tip_height": tip,
+            "tip_time": tip_time,
+            "others": others,
+        }
+
+    def _other_handles(self, handle: str, node_ids: set[str], payout_address: str | None) -> list[dict]:
+        """Other handles that share a node id or the payout address. Capped, node id first."""
+        found: dict[str, dict] = {}
+
+        def add(other: str | None, via: str, node_id: str | None = None, address: str | None = None) -> None:
+            name = norm_handle(other)
+            if not valid_handle(name) or name == handle:
+                return
+            row = found.setdefault(
+                name,
+                {"handle": name, "via": via, "node_id": node_id, "address": address},
+            )
+            if via == "node_id":
+                row["via"] = "node_id"
+                row["node_id"] = node_id or row.get("node_id")
+            elif row.get("via") != "node_id":
+                row["address"] = address or row.get("address")
+
+        ids = [nid for nid in node_ids if nid]
+        for start in range(0, len(ids), 400):
+            chunk = ids[start : start + 400]
+            marks = ",".join("?" * len(chunk))
+            for row in self.db.conn.execute(
+                f"""
+                SELECT lower(TRIM(xaccount)) AS handle, lower(node_id) AS node_id
+                FROM lottery_active
+                WHERE lower(node_id) IN ({marks})
+                  AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+                GROUP BY lower(TRIM(xaccount)), lower(node_id)
+                """,
+                tuple(chunk),
+            ).fetchall():
+                add(row["handle"], "node_id", row["node_id"], None)
+            for row in self.db.conn.execute(
+                f"""
+                SELECT lower(TRIM(xaccount)) AS handle, lower(node_id) AS node_id, address
+                FROM lottery_wins
+                WHERE height>=1 AND lower(node_id) IN ({marks})
+                  AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+                GROUP BY lower(TRIM(xaccount)), lower(node_id)
+                """,
+                tuple(chunk),
+            ).fetchall():
+                add(row["handle"], "node_id", row["node_id"], row["address"])
+            for row in self.db.conn.execute(
+                f"""
+                SELECT xaccount, lower(node_id) AS node_id, address FROM node_seen
+                WHERE lower(node_id) IN ({marks})
+                """,
+                tuple(chunk),
+            ).fetchall():
+                add(row["xaccount"], "node_id", row["node_id"], row["address"])
+            for row in self.db.conn.execute(
+                f"SELECT handle, lower(node_id) AS node_id, address FROM identities WHERE lower(node_id) IN ({marks})",
+                tuple(chunk),
+            ).fetchall():
+                add(row["handle"], "node_id", row["node_id"], row["address"])
+        if payout_address:
+            for row in self.db.conn.execute(
+                """
+                SELECT xaccount, node_id, address FROM lottery_wins
+                WHERE address=? AND height>=1 AND xaccount IS NOT NULL AND TRIM(xaccount)!=''
+                """,
+                (payout_address,),
+            ).fetchall():
+                add(row["xaccount"], "payout_address", (row["node_id"] or "").lower() or None, row["address"])
+            for row in self.db.conn.execute(
+                "SELECT xaccount, node_id, address FROM node_seen WHERE address=?",
+                (payout_address,),
+            ).fetchall():
+                add(row["xaccount"], "payout_address", (row["node_id"] or "").lower() or None, row["address"])
+        rows = list(found.values())
+        rows.sort(key=lambda row: (0 if row["via"] == "node_id" else 1, row["handle"]))
+        return rows[:5]
+
     def lottery_members(
         self,
         q: str = "",
@@ -623,6 +942,8 @@ class Queries:
                     "first_hat": None,
                     "last_hat": None,
                     "last_seen": None,
+                    "identity_address": None,
+                    "payout_address": None,
                 },
             )
 
@@ -635,6 +956,7 @@ class Queries:
             row = row_for(h)
             row["asset"] = r["asset"] or row["asset"]
             row["address"] = r["address"] or row["address"]
+            row["identity_address"] = r["address"] or row["identity_address"]
             row["node_id"] = r["node_id"] or row["node_id"]
 
         for r in self.db.conn.execute(
@@ -647,6 +969,10 @@ class Queries:
             row["address"] = row["address"] or r["address"]
             row["node_id"] = row["node_id"] or r["node_id"]
             row["last_seen"] = r["last_seen"]
+            seen_at = r["last_seen"] if isinstance(r["last_seen"], int) else -1
+            if r["address"] and seen_at >= int(row.get("_pay_seen") or -1):
+                row["_node_address"] = r["address"]
+                row["_pay_seen"] = seen_at
 
         for r in self.db.conn.execute(
             """
@@ -689,6 +1015,7 @@ class Queries:
         for h in hat | beat:
             row_for(h)
 
+        win_payouts = self._latest_win_address_by_handle()
         items: list[dict[str, Any]] = []
         eligible_total = 0
         for handle, row in known.items():
@@ -701,9 +1028,11 @@ class Queries:
                 continue
             if scope != "all" and not eligible:
                 continue
+            payout = win_payouts.get(handle) or row.get("_node_address")
             items.append(
                 {
-                    **row,
+                    **{k: v for k, v in row.items() if not str(k).startswith("_")},
+                    "payout_address": payout,
                     "in_hat": in_hat,
                     "heartbeat": heartbeat,
                     "eligible": eligible,
@@ -750,6 +1079,8 @@ class Queries:
                 "first_hat": None,
                 "last_hat": None,
                 "last_seen": None,
+                "identity_address": None,
+                "payout_address": None,
                 "in_hat": name in {norm_handle(h) for h in (hat_handles or [])},
                 "heartbeat": name in {norm_handle(h) for h in (heartbeat_handles or [])},
                 "eligible": False,
