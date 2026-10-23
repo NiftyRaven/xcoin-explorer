@@ -19,6 +19,7 @@ from explorer.chain import (
     SUBUNIT,
     TICKER,
 )
+from explorer.eligibility import assemble
 from explorer.hatstats import attach_live_status, compute_hat_stats, handle_in_records, valid_handle
 from explorer.ipfs import attach_ipfs_fields, fetch_content, inspect_cid, valid_cid
 from explorer.links import MAX_BATCH, AddressLinks, addresses_in, tx_sighash_all
@@ -419,6 +420,66 @@ def create_app(queries: Queries, indexer, rpc, launch_proceeds: tuple | list | N
             heartbeat_handles=set(heartbeat),
             nodes=nodes,
             live=live,
+        )
+        return labeled(body)
+
+    @app.get("/api/eligibility")
+    def eligibility(q: str = ""):
+        """Checklist for one @handle or address. Does not change the wallet or the chain."""
+        raw = (q or "").strip()
+        if not raw:
+            return JSONResponse({"error": "empty query"}, status_code=400)
+        resolved = queries.resolve_eligibility_query(raw)
+        if not resolved.get("ok"):
+            return JSONResponse({"error": resolved.get("error") or "not a handle or address"}, status_code=400)
+        handle = resolved.get("handle")
+        matches = [
+            {"handle": row.get("handle"), "via": row.get("via")}
+            for row in (resolved.get("matches") or [])
+            if row.get("handle") and row.get("handle") != handle
+        ]
+        hat, _heartbeat, live = live_lottery_handles(queries, indexer, rpc)
+        hat_source = "stamped_handles" if isinstance(live, dict) and live.get("stamped_handles") else "last_xva"
+        nodes = app.state.live_node_cache.get(
+            ("live-nodes",),
+            lambda: live_node_details(indexer, rpc),
+        )
+        tip_height = None
+        if isinstance(live, dict) and live.get("height") is not None:
+            try:
+                tip_height = int(live.get("height"))
+            except (TypeError, ValueError):
+                tip_height = None
+        if handle:
+            index = queries.eligibility_index(handle)
+        else:
+            index = {
+                "handle": "",
+                "found": False,
+                "identity_address": None,
+                "payout_address": None,
+                "registered_node_id": None,
+                "node_ids": [],
+                "last_seen": None,
+                "last_hat": None,
+                "last_hat_time": None,
+                "ever_in_hat": False,
+                "tip_height": queries.db.indexed_height(),
+                "tip_time": None,
+                "others": [],
+            }
+        if index is None:
+            return JSONResponse({"error": "invalid handle"}, status_code=400)
+        body = assemble(
+            index,
+            hat_handles=set(hat),
+            hat_source=hat_source,
+            live_nodes=nodes,
+            live=live,
+            tip_height=tip_height,
+            query=raw,
+            via=resolved.get("via") or "handle",
+            also=matches[:5],
         )
         return labeled(body)
 
